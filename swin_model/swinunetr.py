@@ -10,7 +10,6 @@ import torch.nn as nn
 # via skip connection at multiple resolutions. Final segmentation output consists of as many
 # output channels as element types we want to segment.
 
-## ADD PADDING TO THE FUNCTIONS
 
 class PatchEmbedding3D(nn.Module):
     # Patch size and embedding dimension (defined as C in the paper) are modifiable hyperparameters
@@ -20,7 +19,15 @@ class PatchEmbedding3D(nn.Module):
         self.embed_layer = nn.Conv3d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, x):
-        # x: (B, H, W, D, S)
+        ph, pw, pd = self.patch_size
+        B, H, W, D, S = x.shape
+        pad_h = (ph - H % ph) % ph
+        pad_w = (pw - W % pw) % pw
+        pad_d = (pd - D % pd) % pd
+        if pad_h > 0 or pad_w > 0 or pad_d > 0:
+            x = F.pad(x, (0, 0, 0, pad_d, 0, pad_w, 0, pad_h))
+            print("Embedding Padded Shape:", x.shape)
+
         x = x.permute(0, 4, 1, 2, 3).contiguous()  # -> (B, S, H, W, D) as required by Conv3D
         x = self.embed_layer(x)  # -> (B, C, H', W', D')
         x = x.permute(0, 2, 3, 4, 1).contiguous()  # -> (B, H', W', D', C)
@@ -31,14 +38,9 @@ def window_partition(x, window_size):
     # x: (B, H', W', D', C) (we will not include the ' in the code for simplicity)
     B, H, W, D, C = x.shape
     wh, ww, wd = window_size
+    assert H % wh == 0 and W % ww == 0 and D % wd == 0, "Window size does not match input dimensions"
     # Divide the patch embedding output into window-sized non-overlapping blocks
-    x = x.view(
-        B,
-        H // wh, wh,
-        W // ww, ww,
-        D // wd, wd,
-        C
-    )  # (B, nH, wh, nW, ww, nD, wd, C)
+    x = x.view(B, H // wh, wh, W // ww, ww, D // wd, wd, C)  # (B, nH, wh, nW, ww, nD, wd, C)
     # Rearrange the axes and make the tensor contiguous in memory to avoid errors
     x = x.permute(0, 1, 3, 5, 2, 4, 6, 7).contiguous()  # (B, nH, nW, nD, wh, ww, wd, C)
     # Merge the window grid and flatten the 3D windows
@@ -135,7 +137,13 @@ class PatchMerging3D(nn.Module):
 
     def forward(self, x):
         B, H, W, D, C = x.shape
-        assert H % 2 == 0 and W % 2 == 0 and D % 2 == 0, "Input dimensions must be even"
+        pad_h = H % 2
+        pad_w = W % 2
+        pad_d = D % 2
+        if pad_h or pad_w or pad_d:
+            x = F.pad(x, (0, 0, 0, pad_d, 0, pad_w, 0, pad_h))
+            print("Merging Padded Shape:", x.shape)
+
         # Split the input into 2x2x2 cubes, each xi has shape (B, H/2, W/2, D/2, C)
         # and contains all voxels of a relative cube position
         x0 = x[:, 0::2, 0::2, 0::2, :]
@@ -186,7 +194,7 @@ class SwinUNETREncoder3D(nn.Module):  # Whole encoding pipeline
 ### TESTING SECTION ###
 if __name__ == "__main__":
     # Dummy variables
-    input_shape = (2, 96, 96, 96, 4)
+    input_shape = (2, 95, 95, 95, 4)
     patch_size = (2, 2, 2)
     embed_dims = [48, 96, 192, 384]
     num_heads = [3, 6, 12, 24]
