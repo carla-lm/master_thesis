@@ -15,7 +15,7 @@ import torch.nn as nn
 
 class PatchEmbedding3D(nn.Module):
     # Patch size and embedding dimension (defined as C in the paper) are modifiable hyperparameters
-    def __init__(self, in_channels, patch_size=(4, 4, 4), embed_dim=96):
+    def __init__(self, in_channels, patch_size, embed_dim):
         super().__init__()
         self.patch_size = patch_size
         self.skip_embed = nn.Sequential(nn.Conv3d(in_channels, embed_dim, kernel_size=3, padding=1),
@@ -167,29 +167,37 @@ class PatchMerging3D(nn.Module):
         return x
 
 
-class ConvBlock(nn.Module):
+class ResBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.conv_block = nn.Sequential(
-            # Padding = 1 so that output size = input size (needed to later fuse with skip connections)
-            nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1),  # Standard CNN kernel size
-            nn.InstanceNorm3d(out_channels),  # Better for CNNs than LayerNorm
-            nn.GELU(),
-            nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.InstanceNorm3d(out_channels),
-            nn.GELU(),
-        )
+        # Padding = 1 so that output size = input size (needed to later fuse with skip connections)
+        self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.norm1 = nn.InstanceNorm3d(out_channels)  # Better for CNNs than LayerNorm
+        self.norm2 = nn.InstanceNorm3d(out_channels)  # Better for CNNs than LayerNorm
+        self.act = nn.GELU()
+        # Adjust residual connection if channels differ
+        self.downsample = None
+        if in_channels != out_channels:
+            self.downsample = nn.Sequential(nn.Conv3d(in_channels, out_channels, kernel_size=1),
+                                            nn.InstanceNorm3d(out_channels))
 
     def forward(self, x):
-        return self.conv_block(x)
+        residual = x
+        out = self.norm2(self.conv2(self.act(self.norm1(self.conv1(x)))))
+        if self.downsample is not None:
+            residual = self.downsample(residual)
+        out += residual
+        out = self.act(out)
+        return out
 
 
 class DecoderBlock(nn.Module):
     def __init__(self, in_channels, skip_channels, out_channels):
         super().__init__()
-        self.skip_channels = skip_channels
-        self.up = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=False)
-        self.conv = ConvBlock(in_channels + skip_channels if skip_channels > 0 else in_channels, out_channels)
+        # In MONAI, upsampling is done with a transposed convolutional layer
+        self.up = nn.ConvTranspose3d(in_channels, out_channels, kernel_size=2, stride=2)
+        self.conv = ResBlock(out_channels + skip_channels, out_channels)
 
     def forward(self, x, skip):
         x = self.up(x)  # Upsample output from deeper layer
@@ -205,7 +213,7 @@ class SwinUNETREncoder3D(nn.Module):  # Whole encoding pipeline
     def __init__(self, in_channels, patch_size, embed_dims, num_heads, window_size):
         super().__init__()
         self.window_size = window_size
-        self.num_stages = len(embed_dims)
+        self.num_stages = len(num_heads)
         self.patch_embed = PatchEmbedding3D(in_channels=in_channels, patch_size=patch_size, embed_dim=embed_dims[0])
         self.trans_blocks = nn.ModuleList()
         self.merge_layers = nn.ModuleList()
@@ -217,8 +225,7 @@ class SwinUNETREncoder3D(nn.Module):  # Whole encoding pipeline
                                        window_size=window_size, shift_size=(1, 1, 1))
             )
             self.trans_blocks.append(stage_blocks)
-            if i < self.num_stages - 1:
-                self.merge_layers.append(PatchMerging3D(embed_dims[i]))
+            self.merge_layers.append(PatchMerging3D(embed_dims[i]))
 
     def forward(self, x):
         skips = []
@@ -228,13 +235,27 @@ class SwinUNETREncoder3D(nn.Module):  # Whole encoding pipeline
         for i in range(self.num_stages):
             x = self.trans_blocks[i](x)
             print(f"Stage {i + 1} Output Shape (before merging):", x.shape)
+            x = self.merge_layers[i](x)
+            print(f"Stage {i + 1} Output Shape (after merging):", x.shape)
             if i < self.num_stages - 1:
-                x = self.merge_layers[i](x)
-                print(f"Stage {i + 1} Output Shape (after merging):", x.shape)
-                if i < self.num_stages - 2:
-                    skips.append(x)  # Save the transformer output after stages 1-3 for the skip connection
+                skips.append(x)  # Save the transformer output after stages 1-3 for the skip connection
 
         return x, skips
+
+
+class EncoderSkipsProcessor(nn.Module):
+    def __init__(self, embed_dims):
+        super().__init__()
+        # Only process skips[1:], skips[0] already has ResBlock applied during patch embedding
+        self.output_block = ResBlock(embed_dims[-1], embed_dims[-1])
+        self.skip_blocks = nn.ModuleList([ResBlock(embed_dims[i], embed_dims[i]) for i in range(len(embed_dims) - 1)])
+
+    def forward(self, encoder_output, skips):
+        processed_output = self.output_block(encoder_output)
+        processed_skips = [skips[0]]
+        for block, skip in zip(self.skip_blocks, skips[1:]):
+            processed_skips.append(block(skip))
+        return processed_output, processed_skips
 
 
 class SwinUNETRDecoder3D(nn.Module):
@@ -253,7 +274,7 @@ class SwinUNETRDecoder3D(nn.Module):
     def forward(self, x, skips):
         for i, stage in enumerate(self.decoder_stages):
             skip = skips[-(i + 1)]
-            print(f"Decoder Level {5 - i}, X and Skip Shape:", x.shape, skip.shape)
+            print(f"Decoder Level {len(self.decoder_stages) - i}, X and Skip Shape:", x.shape, skip.shape)
             x = stage(x, skip)
         return x
 
@@ -267,36 +288,65 @@ class SegmentationHead(nn.Module):
         return self.head(x)  # (B, num_classes, D, H, W)
 
 
+class SwinUNETR3D(nn.Module):
+    def __init__(self, input_shape, patch_size, embed_dims, num_heads, window_size, num_classes):
+        super().__init__()
+        self.encoder = SwinUNETREncoder3D(in_channels=input_shape[4], patch_size=patch_size, embed_dims=embed_dims,
+                                          num_heads=num_heads, window_size=window_size)
+        self.processor = EncoderSkipsProcessor(embed_dims)
+        self.decoder = SwinUNETRDecoder3D(embed_dims)
+        self.seg_head = SegmentationHead(in_channels=embed_dims[0], num_classes=num_classes)
+
+    def forward(self, x):
+        print("Raw Input Shape:", x.shape)
+        # Encoding Stage (Linear Embedding + Swin Transformers + Merging Layers)
+        encoder_output, skips = self.encoder(x)
+        print("Encoder Output Shape:", encoder_output.shape)
+        for i, skip in enumerate(skips):
+            print(f"Skip {i + 1} shape: {skip.shape}")
+
+        # Make Skips and Output Shape (B, C, D, H, W) for Decoder
+        encoder_output = encoder_output.permute(0, 4, 3, 1, 2).contiguous()  # (B, C, D, H, W)
+        skips = [s.permute(0, 4, 3, 1, 2).contiguous() for s in skips]  # (B, C, D, H, W)
+        encoder_output, skips = self.processor(encoder_output, skips)
+        print("Processed Encoder Output Shape:", encoder_output.shape)
+        for i, skip in enumerate(skips):
+            print(f"Processed Skip {i + 1} shape: {skip.shape}")
+
+        # Decoding Stage (Upsampling Blocks + ResCNN Blocks)
+        decoder_output = self.decoder(encoder_output, skips)
+        print("Decoder Output Shape:", decoder_output.shape)
+
+        # Obtain Final Segmented Output
+        final_output = self.seg_head(decoder_output)
+        print("Final Output Shape:", final_output.shape)
+
+        return final_output
+
+
 ### TESTING SECTION ###
 if __name__ == "__main__":
     # Dummy variables
     input_shape = (2, 191, 191, 191, 4)
     patch_size = (2, 2, 2)
     embed_dims = [48, 96, 192, 384, 768]
-    num_heads = [3, 6, 12, 24, 48]
+    num_heads = [3, 6, 12, 24]
     window_size = (2, 2, 2)
+    num_classes = 3
     x = torch.randn(input_shape)
-    print("Raw Input Shape:", x.shape)
 
-    # Encoding Stage (Linear Embedding + Swin Transformers + Merging Layers)
-    encoder = SwinUNETREncoder3D(in_channels=x.shape[4], patch_size=patch_size, embed_dims=embed_dims,
-                                 num_heads=num_heads, window_size=window_size)
-    encoder_output, skips = encoder(x)
-    print("Encoder Output Shape:", encoder_output.shape)
-    for i, skip in enumerate(skips):
-        print(f"Skip {i + 1} shape: {skip.shape}")
+    # Instantiate model
+    model = SwinUNETR3D(
+        input_shape=input_shape,
+        patch_size=patch_size,
+        embed_dims=embed_dims,
+        num_heads=num_heads,
+        window_size=window_size,
+        num_classes=num_classes
+    )
 
-    # Make Skips and Output Shape (B, C, D, H, W) for Decoder
-    encoder_output = encoder_output.permute(0, 4, 3, 1, 2).contiguous()  # (B, C, D, H, W)
-    skips = [s.permute(0, 4, 3, 1, 2).contiguous() for s in skips]  # (B, C, D, H, W)
+    # Forward pass
+    with torch.no_grad():
+        output = model(x)
 
-    # Decoding Stage (CNN + Upsampling Blocks)
-    decoder = SwinUNETRDecoder3D(embed_dims)
-    decoder_output = decoder(encoder_output, skips)
-    print("Decoder Output Shape:", decoder_output.shape)  # Should approach patch-embedded input resolution
-
-    # Obtain Final Segmented Output
-    segmentation_head = SegmentationHead(in_channels=embed_dims[0], num_classes=3)  # Adjust num_classes as needed
-    output = segmentation_head(decoder_output)
-    print("Final Output Shape:", output.shape)
-
+    print("Output shape:", output.shape)
