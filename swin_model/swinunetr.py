@@ -1,7 +1,7 @@
 import torch
-import torch.nn.functional as F
 import torch.nn as nn
-
+from torch.nn.init import trunc_normal_
+import torch.nn.functional as F
 
 # Notation: input is 3D image with shape (H, W, D, S) (height, width, depth, channels), there will be
 # batches so the input has shape (B, H, W, D, S). For convenience, we use (B, S, D, H, W) in the decoder stage
@@ -78,8 +78,8 @@ class MLP(nn.Module):
         return self.drop_layer(self.lin_layer2(self.act_layer(self.lin_layer1(x))))
 
 
-class WindowAttention3D(nn.Module):  ## REMEMBER TO ADD RELATIVE POSITION BIAS AND MASKING TO ATTN
-    def __init__(self, embed_dim, window_size, num_heads):
+class WindowAttention3D(nn.Module):
+    def __init__(self, embed_dim, window_size, num_heads, attn_drop, proj_drop):
         super().__init__()
         self.embed_dim = embed_dim
         self.window_size = window_size
@@ -88,8 +88,36 @@ class WindowAttention3D(nn.Module):  ## REMEMBER TO ADD RELATIVE POSITION BIAS A
         self.attn_scale = self.head_dim ** -0.5  # To improve training stability
         self.qkv = nn.Linear(embed_dim, embed_dim * 3, bias=True)
         self.out_proj = nn.Linear(embed_dim, embed_dim)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj_drop = nn.Dropout(proj_drop)
+        self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, x):
+        H, W, D = self.window_size
+        # Create a bias table for each possible relative position in a 3D window
+        self.relative_position_bias_table = nn.Parameter(torch.zeros((2 * H - 1) * (2 * W - 1) * (2 * D - 1), num_heads))
+        # Create a 3D grid of coordinates in a window
+        coords_h = torch.arange(H)
+        coords_w = torch.arange(W)
+        coords_d = torch.arange(D)
+        coords = torch.stack(torch.meshgrid(coords_h, coords_w, coords_d, indexing="ij"))  # (3, H, W, D)
+        coords_flatten = coords.flatten(1)  # (3, H*W*D) Each column is a (H,W,D) coordinate of a token in the window
+        # Compute the pairwise relative positions between every token pair in the window
+        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # (3, N, N)
+        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # (N, N, 3)
+        # Shift the relative coords to be non-negative, for indexing
+        relative_coords[:, :, 0] += H - 1
+        relative_coords[:, :, 1] += W - 1
+        relative_coords[:, :, 2] += D - 1
+        # Convert the 3D relative position (x, y, z) into a flat 1D index to look up in the bias table
+        relative_coords[:, :, 0] *= (2 * W - 1) * (2 * D - 1)
+        relative_coords[:, :, 1] *= (2 * D - 1)
+        relative_position_index = relative_coords.sum(-1)  # (N, N)
+
+        # Register the index as a buffer (non-trainable but saved with the model)
+        self.register_buffer("relative_position_index", relative_position_index)
+        trunc_normal_(self.relative_position_bias_table, std=0.02)  # Initialize bias weights
+
+    def forward(self, x, mask):
         B_, N, C = x.shape  # B_ = number of windows * batch, N = tokens per window, C = embed_dim
         qkv = self.qkv(x)  # (B_, N, 3×C) --> calculate concatenated QKV for each token
         # Split QKV into Q,K,V, then split each of those in head_dim chunks across heads
@@ -97,37 +125,97 @@ class WindowAttention3D(nn.Module):  ## REMEMBER TO ADD RELATIVE POSITION BIAS A
         q, k, v = qkv.permute(2, 0, 3, 1, 4)  # Each has dimension (B_, num_heads, N, head_dim)
         # Each head calculates its own scaled attention scores between all N tokens of each window
         attn = (q @ k.transpose(-2, -1)) * self.attn_scale  # (B_, num_heads, N_queries, N_keys)
+        # Add a learnt relative position bias per head
+        bias = self.relative_position_bias_table[self.relative_position_index.view(-1)]
+        bias = bias.view(N, N, -1).permute(2, 0, 1)  # (num_heads, N, N)
+        attn = attn + bias.unsqueeze(0)
+
+        # Apply attention mask if provided (for SW-MSA)
+        if mask is not None:
+            num_windows = mask.shape[0]
+            # From (B_, num_heads, N, N) to (B, num_windows, num_heads, N, N) -> separate attn by batch and window
+            attn = attn.view(B_ // num_windows, num_windows, self.num_heads, N, N)
+            attn = attn + mask.unsqueeze(1).unsqueeze(0)  # Apply mask to attn scores
+            attn = attn.view(-1, self.num_heads, N, N)  # Return to (B_, num_heads, N, N)
+
         # Softmax is applied over the keys dimension to get a probability distribution of the keys for each query
-        attn = attn.softmax(dim=-1)
-        # Calculate the weighted attention, concatenate heads' outputs along the embedding dimension
+        attn = self.softmax(attn)
+        attn = self.attn_drop(attn)
+        # Calculate the weighted attention, concatenate the heads' outputs along the embedding dimension
         attn = (attn @ v).transpose(1, 2).reshape(B_, N, C)
-        return self.out_proj(attn)  # Fuse the info from all heads
+        attn = self.out_proj(attn)  # Fuse the info from all heads
+        attn = self.proj_drop(attn)
+        return attn
+
+
+def compute_attention_mask(input_shape, window_size, shift_size):
+    H, W, D = input_shape
+    mask = torch.zeros((1, H, W, D, 1))
+    id = 0  # Unique number for each mask region
+    # Divide input into blocks of three types: before window region, partially overlapping region, shifted window region
+    for h in (slice(0, -window_size[0]), slice(-window_size[0], -shift_size[0]), slice(-shift_size[0], None)):
+        for w in (slice(0, -window_size[1]), slice(-window_size[1], -shift_size[1]), slice(-shift_size[1], None)):
+            for d in (slice(0, -window_size[2]), slice(-window_size[2], -shift_size[2]), slice(-shift_size[2], None)):
+                mask[:, h, w, d, :] = id  # Each region gets a unique label
+                id += 1
+
+    mask_windows = window_partition(mask, window_size)  # (num_windows, window_size^3, 1)
+    mask_windows = mask_windows.squeeze(-1)  # Remove last dimension
+    # Calculate if tokens belong to the same region (difference = 0) or not
+    attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)  # (num_windows, N, N)
+    # If difference = 0, attention is allowed (no added value). If not, it is masked (-100 -> softmax will make it 0)
+    attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+    return attn_mask  # One attention mask per window (num_windows, N, N)
 
 
 class SwinTransformerBlock3D(nn.Module):
-    def __init__(self, embed_dim, num_heads, window_size=(7, 7, 7), shift_size=(0, 0, 0), mlp_ratio=4.0):
+    def __init__(self, embed_dim, num_heads, window_size, shift_size, mlp_ratio=4.0):
         super().__init__()
         self.embed_dim = embed_dim
         self.window_size = window_size
         self.shift_size = shift_size
         self.num_heads = num_heads
         self.norm1 = nn.LayerNorm(embed_dim)  # LayerNorm to stabilize training and improve convergence
-        self.attn = WindowAttention3D(embed_dim, window_size, num_heads)
+        self.attn = WindowAttention3D(embed_dim, window_size, num_heads, attn_drop=0.0, proj_drop=0.0)
         self.norm2 = nn.LayerNorm(embed_dim)
         self.mlp = MLP(embed_dim, int(embed_dim * mlp_ratio))  # Paper design choice
 
     def forward(self, x):
         orig_shape = x.shape
+        wh, ww, wd = self.window_size
         residual = x  # The input will be used later for a residual connection
         x = self.norm1(x)  # Apply 1st LN
         if any(s > 0 for s in self.shift_size):
-            x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1], -self.shift_size[2]), dims=(1, 2, 3))
+            shifted_x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1], -self.shift_size[2]), dims=(1, 2, 3))
+        else:
+            shifted_x = x
 
-        x_windows = window_partition(x, self.window_size)  # (num_windows * B, window_size^3, C)
-        attn_windows = self.attn(x_windows)
-        x = window_reverse(attn_windows, self.window_size, orig_shape)  # (B, H, W, D, C)
+        # Compute padding needed for window partitioning
+        pad_h = (wh - orig_shape[1] % wh) % wh
+        pad_w = (ww - orig_shape[2] % ww) % ww
+        pad_d = (wd - orig_shape[3] % wd) % wd
+        if pad_h > 0 or pad_w > 0 or pad_d > 0:
+            shifted_x = F.pad(shifted_x, (0, 0, 0, pad_d, 0, pad_w, 0, pad_h))
+            print(f"Padded for window partition: {shifted_x.shape}")
+
+        padded_shape = shifted_x.shape
+        x_windows = window_partition(shifted_x, self.window_size)  # (num_windows * B, window_size^3, C)
+
+        # Compute attention mask only for shifted blocks
+        mask = None
         if any(s > 0 for s in self.shift_size):
-            x = torch.roll(x, shifts=(self.shift_size[0], self.shift_size[1], self.shift_size[2]), dims=(1, 2, 3))
+            mask = compute_attention_mask(padded_shape[1:4], self.window_size, self.shift_size)
+
+        attn_windows = self.attn(x_windows, mask)
+        shifted_x = window_reverse(attn_windows, self.window_size, padded_shape)  # (B, H, W, D, C)
+        if any(s > 0 for s in self.shift_size):
+            x = torch.roll(shifted_x, shifts=(self.shift_size[0], self.shift_size[1], self.shift_size[2]), dims=(1, 2, 3))
+        else:
+            x = shifted_x
+
+        if pad_h > 0 or pad_w > 0 or pad_d > 0:  # Remove padding
+            x = x[:, :orig_shape[1], :orig_shape[2], :orig_shape[3], :]
+            print(f"Pad Removed: {x.shape}")
 
         x = residual + x  # Apply first residual connection to the attention output
         x = x + self.mlp(self.norm2(x))  # Apply 2nd LN, MLP and second residual connection
@@ -217,12 +305,14 @@ class SwinUNETREncoder3D(nn.Module):  # Whole encoding pipeline
         self.patch_embed = PatchEmbedding3D(in_channels=in_channels, patch_size=patch_size, embed_dim=embed_dims[0])
         self.trans_blocks = nn.ModuleList()
         self.merge_layers = nn.ModuleList()
+        shift = tuple(w // 2 for w in window_size)
+
         for i in range(self.num_stages):
             stage_blocks = nn.Sequential(
                 SwinTransformerBlock3D(embed_dim=embed_dims[i], num_heads=num_heads[i],
                                        window_size=window_size, shift_size=(0, 0, 0)),
                 SwinTransformerBlock3D(embed_dim=embed_dims[i], num_heads=num_heads[i],
-                                       window_size=window_size, shift_size=(1, 1, 1))
+                                       window_size=window_size, shift_size=shift)
             )
             self.trans_blocks.append(stage_blocks)
             self.merge_layers.append(PatchMerging3D(embed_dims[i]))
@@ -283,9 +373,10 @@ class SegmentationHead(nn.Module):
     def __init__(self, in_channels, num_classes):
         super().__init__()
         self.head = nn.Conv3d(in_channels, num_classes, kernel_size=1)
+        self.act = nn.Sigmoid()  # Output in [0,1] range
 
     def forward(self, x):
-        return self.head(x)  # (B, num_classes, D, H, W)
+        return self.act(self.head(x))  # (B, num_classes, D, H, W)
 
 
 class SwinUNETR3D(nn.Module):
@@ -331,7 +422,7 @@ if __name__ == "__main__":
     patch_size = (2, 2, 2)
     embed_dims = [48, 96, 192, 384, 768]
     num_heads = [3, 6, 12, 24]
-    window_size = (2, 2, 2)
+    window_size = (7, 7, 7)
     num_classes = 3
     x = torch.randn(input_shape)
 
