@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.nn.init import trunc_normal_
 import torch.nn.functional as F
 
+
 # Notation: input is 3D image with shape (H, W, D, S) (height, width, depth, channels), there will be
 # batches so the input has shape (B, H, W, D, S). For convenience, we use (B, S, D, H, W) in the decoder stage
 # as that is the format that convolution functions require.
@@ -30,7 +31,7 @@ class PatchEmbedding3D(nn.Module):
         pad_d = (pd - D % pd) % pd
         if pad_h > 0 or pad_w > 0 or pad_d > 0:
             x = F.pad(x, (0, 0, 0, pad_d, 0, pad_w, 0, pad_h))
-            print("Embedding Padded Shape:", x.shape)
+            # print("Embedding Padded Shape:", x.shape)
 
         x = x.permute(0, 4, 1, 2, 3).contiguous()  # (B, S, H, W, D) as required by Conv3D
         x1 = self.skip_embed(x)  # (B, C, H, W, D) For the first skip connection (no downsampling)
@@ -94,7 +95,8 @@ class WindowAttention3D(nn.Module):
 
         H, W, D = self.window_size
         # Create a bias table for each possible relative position in a 3D window
-        self.relative_position_bias_table = nn.Parameter(torch.zeros((2 * H - 1) * (2 * W - 1) * (2 * D - 1), num_heads))
+        self.relative_position_bias_table = nn.Parameter(
+            torch.zeros((2 * H - 1) * (2 * W - 1) * (2 * D - 1), num_heads))
         # Create a 3D grid of coordinates in a window
         coords_h = torch.arange(H)
         coords_w = torch.arange(W)
@@ -132,6 +134,7 @@ class WindowAttention3D(nn.Module):
 
         # Apply attention mask if provided (for SW-MSA)
         if mask is not None:
+            mask = mask.to(attn.device)
             num_windows = mask.shape[0]
             # From (B_, num_heads, N, N) to (B, num_windows, num_heads, N, N) -> separate attn by batch and window
             attn = attn.view(B_ // num_windows, num_windows, self.num_heads, N, N)
@@ -186,7 +189,8 @@ class SwinTransformerBlock3D(nn.Module):
         residual = x  # The input will be used later for a residual connection
         x = self.norm1(x)  # Apply 1st LN
         if any(s > 0 for s in self.shift_size):
-            shifted_x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1], -self.shift_size[2]), dims=(1, 2, 3))
+            shifted_x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1], -self.shift_size[2]),
+                                   dims=(1, 2, 3))
         else:
             shifted_x = x
 
@@ -196,7 +200,7 @@ class SwinTransformerBlock3D(nn.Module):
         pad_d = (wd - orig_shape[3] % wd) % wd
         if pad_h > 0 or pad_w > 0 or pad_d > 0:
             shifted_x = F.pad(shifted_x, (0, 0, 0, pad_d, 0, pad_w, 0, pad_h))
-            print(f"Padded for window partition: {shifted_x.shape}")
+            # print(f"Padded for window partition: {shifted_x.shape}")
 
         padded_shape = shifted_x.shape
         x_windows = window_partition(shifted_x, self.window_size)  # (num_windows * B, window_size^3, C)
@@ -209,13 +213,14 @@ class SwinTransformerBlock3D(nn.Module):
         attn_windows = self.attn(x_windows, mask)
         shifted_x = window_reverse(attn_windows, self.window_size, padded_shape)  # (B, H, W, D, C)
         if any(s > 0 for s in self.shift_size):
-            x = torch.roll(shifted_x, shifts=(self.shift_size[0], self.shift_size[1], self.shift_size[2]), dims=(1, 2, 3))
+            x = torch.roll(shifted_x, shifts=(self.shift_size[0], self.shift_size[1], self.shift_size[2]),
+                           dims=(1, 2, 3))
         else:
             x = shifted_x
 
         if pad_h > 0 or pad_w > 0 or pad_d > 0:  # Remove padding
             x = x[:, :orig_shape[1], :orig_shape[2], :orig_shape[3], :]
-            print(f"Pad Removed: {x.shape}")
+            # print(f"Pad Removed: {x.shape}")
 
         x = residual + x  # Apply first residual connection to the attention output
         x = x + self.mlp(self.norm2(x))  # Apply 2nd LN, MLP and second residual connection
@@ -236,7 +241,7 @@ class PatchMerging3D(nn.Module):
         pad_d = D % 2
         if pad_h or pad_w or pad_d:
             x = F.pad(x, (0, 0, 0, pad_d, 0, pad_w, 0, pad_h))
-            print("Merging Padded Shape:", x.shape)
+            # print("Merging Padded Shape:", x.shape)
 
         # Split the input into 2x2x2 cubes, each xi has shape (B, H/2, W/2, D/2, C)
         # and contains all voxels of a relative cube position
@@ -289,10 +294,28 @@ class DecoderBlock(nn.Module):
 
     def forward(self, x, skip):
         x = self.up(x)  # Upsample output from deeper layer
-        print("Upsampled X Shape:", x.shape)
+        # print("Upsampled X Shape:", x.shape)
         if skip is not None:
+            # Crop x or skip so their dimensions match
+            def crop_to_match(x1, x2):
+                # x and skip have shape [B, C, D, H, W]
+                d_diff = x1.size(2) - x2.size(2)
+                h_diff = x1.size(3) - x2.size(3)
+                w_diff = x1.size(4) - x2.size(4)
+                return x1[:, :,
+                       d_diff // 2: d_diff // 2 + x2.size(2),
+                       h_diff // 2: h_diff // 2 + x2.size(3),
+                       w_diff // 2: w_diff // 2 + x2.size(4)]
+
+            if x.size(2) != skip.size(2) or x.size(3) != skip.size(3) or x.size(4) != skip.size(4):
+                if x.numel() > skip.numel():
+                    x = crop_to_match(x, skip)
+                else:
+                    skip = crop_to_match(skip, x)
+
+            # print("Cropped X Shape:", x.shape)
             x = torch.cat([x, skip], dim=1)  # Concatenate upsampled tensor with skip connection
-            print("Concat Shape:", x.shape)
+            # print("Concat Shape:", x.shape)
         x = self.conv(x)  # Apply the two convolution layers with normalization and activation
         return x
 
@@ -321,12 +344,12 @@ class SwinUNETREncoder3D(nn.Module):  # Whole encoding pipeline
         skips = []
         skip_embed, x = self.patch_embed(x)
         skips.extend([skip_embed, x])
-        print("Patch Embedding Output Shape:", x.shape)
+        # print("Patch Embedding Output Shape:", x.shape)
         for i in range(self.num_stages):
             x = self.trans_blocks[i](x)
-            print(f"Stage {i + 1} Output Shape (before merging):", x.shape)
+            # print(f"Stage {i + 1} Output Shape (before merging):", x.shape)
             x = self.merge_layers[i](x)
-            print(f"Stage {i + 1} Output Shape (after merging):", x.shape)
+            # print(f"Stage {i + 1} Output Shape (after merging):", x.shape)
             if i < self.num_stages - 1:
                 skips.append(x)  # Save the transformer output after stages 1-3 for the skip connection
 
@@ -364,7 +387,7 @@ class SwinUNETRDecoder3D(nn.Module):
     def forward(self, x, skips):
         for i, stage in enumerate(self.decoder_stages):
             skip = skips[-(i + 1)]
-            print(f"Decoder Level {len(self.decoder_stages) - i}, X and Skip Shape:", x.shape, skip.shape)
+            # print(f"Decoder Level {len(self.decoder_stages) - i}, X and Skip Shape:", x.shape, skip.shape)
             x = stage(x, skip)
         return x
 
@@ -380,9 +403,9 @@ class SegmentationHead(nn.Module):
 
 
 class SwinUNETR3D(nn.Module):
-    def __init__(self, input_shape, patch_size, embed_dims, num_heads, window_size, num_classes):
+    def __init__(self, in_channels, patch_size, embed_dims, num_heads, window_size, num_classes):
         super().__init__()
-        self.encoder = SwinUNETREncoder3D(in_channels=input_shape[4], patch_size=patch_size, embed_dims=embed_dims,
+        self.encoder = SwinUNETREncoder3D(in_channels=in_channels, patch_size=patch_size, embed_dims=embed_dims,
                                           num_heads=num_heads, window_size=window_size)
         self.processor = EncoderSkipsProcessor(embed_dims)
         self.decoder = SwinUNETRDecoder3D(embed_dims)
@@ -390,6 +413,8 @@ class SwinUNETR3D(nn.Module):
 
     def forward(self, x):
         print("Raw Input Shape:", x.shape)
+        x = x.permute(0, 3, 4, 2, 1).contiguous()  # Input has shape (B, C, D, H, W), make it (B, H, W, D, C)
+        print("Encoder-ready Input Shape:", x.shape)
         # Encoding Stage (Linear Embedding + Swin Transformers + Merging Layers)
         encoder_output, skips = self.encoder(x)
         print("Encoder Output Shape:", encoder_output.shape)
@@ -400,9 +425,9 @@ class SwinUNETR3D(nn.Module):
         encoder_output = encoder_output.permute(0, 4, 3, 1, 2).contiguous()  # (B, C, D, H, W)
         skips = [s.permute(0, 4, 3, 1, 2).contiguous() for s in skips]  # (B, C, D, H, W)
         encoder_output, skips = self.processor(encoder_output, skips)
-        print("Processed Encoder Output Shape:", encoder_output.shape)
-        for i, skip in enumerate(skips):
-            print(f"Processed Skip {i + 1} shape: {skip.shape}")
+        # print("Processed Encoder Output Shape:", encoder_output.shape)
+        # for i, skip in enumerate(skips):
+            # print(f"Processed Skip {i + 1} shape: {skip.shape}")
 
         # Decoding Stage (Upsampling Blocks + ResCNN Blocks)
         decoder_output = self.decoder(encoder_output, skips)
@@ -418,7 +443,7 @@ class SwinUNETR3D(nn.Module):
 ### TESTING SECTION ###
 if __name__ == "__main__":
     # Dummy variables
-    input_shape = (2, 191, 191, 191, 4)
+    input_shape = (2, 4, 100, 100, 100)
     patch_size = (2, 2, 2)
     embed_dims = [48, 96, 192, 384, 768]
     num_heads = [3, 6, 12, 24]
@@ -428,7 +453,7 @@ if __name__ == "__main__":
 
     # Instantiate model
     model = SwinUNETR3D(
-        input_shape=input_shape,
+        in_channels=input_shape[1],
         patch_size=patch_size,
         embed_dims=embed_dims,
         num_heads=num_heads,
@@ -436,8 +461,4 @@ if __name__ == "__main__":
         num_classes=num_classes
     )
 
-    # Forward pass
-    with torch.no_grad():
-        output = model(x)
-
-    print("Output shape:", output.shape)
+    output = model(x)
