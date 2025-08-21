@@ -20,7 +20,8 @@ class PatchEmbedding3D(nn.Module):
         super().__init__()
         self.patch_size = patch_size
         self.skip_embed = nn.Sequential(nn.Conv3d(in_channels, embed_dim, kernel_size=3, padding=1),
-                                        nn.InstanceNorm3d(embed_dim), nn.ReLU(inplace=True))
+                                            nn.InstanceNorm3d(embed_dim), nn.GELU())
+        # self.skip_embed = ResBlock(in_channels, embed_dim)  # So it is consistent with other skips, and more robust
         self.patch_embed = nn.Conv3d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, x):
@@ -33,11 +34,11 @@ class PatchEmbedding3D(nn.Module):
             x = F.pad(x, (0, 0, 0, pad_d, 0, pad_w, 0, pad_h))
             # print("Embedding Padded Shape:", x.shape)
 
-        x = x.permute(0, 4, 1, 2, 3).contiguous()  # (B, S, H, W, D) as required by Conv3D
-        x1 = self.skip_embed(x)  # (B, C, H, W, D) For the first skip connection (no downsampling)
-        x2 = self.patch_embed(x)  # (B, C, H', W', D') For the second skip connection (downsampling)
-        x1 = x1.permute(0, 2, 3, 4, 1).contiguous()  # (B, H, W, D, C)
-        x2 = x2.permute(0, 2, 3, 4, 1).contiguous()  # (B, H', W', D', C)
+        x = x.permute(0, 4, 3, 1, 2).contiguous()  # (B, S, D, H, W) as required by Conv3D
+        x1 = self.skip_embed(x)  # (B, C, D, H, W) For the first skip connection (no downsampling)
+        x2 = self.patch_embed(x)  # (B, C, D', H', W') For the second skip connection (downsampling)
+        x1 = x1.permute(0, 3, 4, 2, 1).contiguous()  # (B, H, W, D, C)
+        x2 = x2.permute(0, 3, 4, 2, 1).contiguous()  # (B, H', W', D', C)
         return x1, x2
 
 
@@ -396,10 +397,11 @@ class SegmentationHead(nn.Module):
     def __init__(self, in_channels, num_classes):
         super().__init__()
         self.head = nn.Conv3d(in_channels, num_classes, kernel_size=1)
-        self.act = nn.Sigmoid()  # Output in [0,1] range
+        # For tasks where each voxel can only belong to one class you don't use sigmoid, you output raw logits
+        # self.act = nn.Sigmoid()  # Output in [0,1] range --> only if you have one class or voxel can be multiclass
 
     def forward(self, x):
-        return self.act(self.head(x))  # (B, num_classes, D, H, W)
+        return self.head(x)  # (B, num_classes, D, H, W)
 
 
 class SwinUNETR3D(nn.Module):
