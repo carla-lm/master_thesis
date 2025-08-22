@@ -232,7 +232,7 @@ def val_epoch(model, loader, epoch, acc_func, model_inferer=None, post_sigmoid=N
             dice_et = run_acc.avg[2]
 
             print(
-                "Val {}/{} {}/{}".format(epoch+1, epochs/val_every+1, idx+1, len(loader)),
+                "Val {}/{} {}/{}".format(epoch+1, np.floor(epochs/val_every)+1, idx+1, len(loader)),
                 ", dice_tc:",
                 dice_tc,
                 ", dice_wt:",
@@ -252,8 +252,8 @@ def trainer(model, train_loader, val_loader, optimizer, loss_func, acc_func, sch
     dices_tc, dices_wt, dices_et, dices_avg = [], [], [], []
     loss_epochs, trains_epoch = [], []
     scaler = torch.amp.GradScaler(enabled=(device.type == "cuda"))
-    for epoch in range(start_epoch, epochs):
-        print(time.ctime(), "Epoch:", epoch)
+    for epoch in range(start_epoch, epochs):  # Training Loop
+        print(time.ctime(), "Epoch:", epoch+1)
         epoch_time = time.time()
         train_loss = train_epoch(model, train_loader, optimizer, scaler, epoch=epoch, loss_func=loss_func)
         print(
@@ -262,7 +262,7 @@ def trainer(model, train_loader, val_loader, optimizer, loss_func, acc_func, sch
             "time {:.2f}s".format(time.time() - epoch_time),
         )
 
-        if (epoch + 1) % val_every == 0 or epoch == 0:
+        if (epoch + 1) % val_every == 0 or epoch == 0:  # Validation Loop
             loss_epochs.append(train_loss)
             trains_epoch.append(int(epoch))
             epoch_time = time.time()
@@ -279,13 +279,23 @@ def trainer(model, train_loader, val_loader, optimizer, loss_func, acc_func, sch
             dices_wt.append(dice_wt)
             dices_et.append(dice_et)
             dices_avg.append(val_avg_acc)
-            if checkpoint and val_avg_acc > val_acc_max:
+            if checkpoint and val_avg_acc > val_acc_max:  # Save best model
                 print("new best ({:.6f} --> {:.6f}). ".format(val_acc_max, val_avg_acc))
                 val_acc_max = val_avg_acc
                 save_checkpoint(model, epoch, dir_add=check_dir, val_acc=val_acc_max, checkpoint_type="best")
 
-            if checkpoint and epoch % 10 == 0:
+            if checkpoint:  # Save current state and metrics every validation loop
                 save_checkpoint(model, epoch, dir_add=check_dir, val_acc=val_avg_acc, checkpoint_type="periodic")
+                history_to_save = {
+                    "val_acc_max": float(val_acc_max),
+                    "dices_tc": [float(x) for x in dices_tc],
+                    "dices_wt": [float(x) for x in dices_wt],
+                    "dices_et": [float(x) for x in dices_et],
+                    "dices_avg": [float(x) for x in dices_avg],
+                    "loss_epochs": [float(x) for x in loss_epochs],
+                    "trains_epoch": trains_epoch,
+                }
+                save_training_history(history_to_save, os.path.join(check_dir, "training_history.json"))
 
             scheduler.step()
 
@@ -301,7 +311,7 @@ if __name__ == '__main__':
 
     # Set parameters that can be passed by the user
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--batch', type=int, default=1)
     parser.add_argument('--embed_dim', type=int, default=48)
@@ -393,6 +403,13 @@ if __name__ == '__main__':
     print(f"Training completed, best average dice: {val_acc_max:.4f} ")
 
     # Save recorded evaluation metrics at the end of the training
-    history_to_save = {"val_acc_max": val_acc_max, "dices_tc": dices_tc, "dices_wt": dices_wt, "dices_et": dices_et,
-                       "dices_avg": dices_avg, "loss_epochs": loss_epochs, "trains_epoch": trains_epoch}
+    history_to_save = {
+        "val_acc_max": float(val_acc_max),
+        "dices_tc": [float(x) for x in dices_tc],
+        "dices_wt": [float(x) for x in dices_wt],
+        "dices_et": [float(x) for x in dices_et],
+        "dices_avg": [float(x) for x in dices_avg],
+        "loss_epochs": [float(x) for x in loss_epochs],
+        "trains_epoch": trains_epoch
+    }
     save_training_history(history_to_save, os.path.join(check_dir, "training_history.json"))
