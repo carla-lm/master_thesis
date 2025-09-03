@@ -1,2 +1,2 @@
 # master_thesis
-![screenshot](swin_model/swin_unetr.png)
+![screenshot](swin_model/assets/swin_unetr.png)
