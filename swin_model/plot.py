@@ -2,45 +2,51 @@ import matplotlib.pyplot as plt
 import matplotlib
 import os
 import json
+import pandas as pd
 matplotlib.use("TkAgg")
 
 # Load file with training data
-data_dir = os.path.join(os.getcwd(), "checkpoints", "20250821_190305")
-history_file = os.path.join(data_dir, "training_history.json")
-with open(history_file, "r") as f:
-    history = json.load(f)
+log_dir = os.path.join(os.getcwd(), "checkpoints", "Tester_Run_V1")
+metrics_file = os.path.join(log_dir, "metrics.csv")
+df = pd.read_csv(metrics_file)
+df = df.dropna(subset=["val_dice_avg"])  # Drop rows that don't have validation steps
 
 # Extract the data
-trains_epoch = history["trains_epoch"]
-loss_epochs = history["loss_epochs"]
-dices_avg = history["dices_avg"]
-dices_tc = history["dices_tc"]
-dices_wt = history["dices_wt"]
-dices_et = history["dices_et"]
+epochs = df["epoch"].values
+train_loss = df["train_loss"].values
+dices_avg = df["val_dice_avg"].values
+dices_tc = df["val_dice_tc"].values
+dices_wt = df["val_dice_wt"].values
+dices_et = df["val_dice_et"].values
 
-
-# Plot the metrics vs epoch
+# Plot training loss vs epochs
 plt.figure("train", (12, 6))
 plt.subplot(1, 2, 1)
 plt.title("Epoch Average Loss")
 plt.xlabel("epoch")
-plt.plot(trains_epoch, loss_epochs, color="red")
+plt.plot(epochs, train_loss, color="red")
+
+# Plot val mean dice
 plt.subplot(1, 2, 2)
 plt.title("Val Mean Dice")
 plt.xlabel("epoch")
-plt.plot(trains_epoch, dices_avg, color="green")
+plt.plot(epochs, dices_avg, color="green")
 plt.show()
-plt.figure("train", (18, 6))
+
+# Plot detailed dice metrics
+plt.figure("val_dice", (18, 6))
 plt.subplot(1, 3, 1)
-plt.title("Val Mean Dice TC")
+plt.title("Val Dice TC")
 plt.xlabel("epoch")
-plt.plot(trains_epoch, dices_tc, color="blue")
+plt.plot(epochs, dices_tc, color="blue")
+
 plt.subplot(1, 3, 2)
-plt.title("Val Mean Dice WT")
+plt.title("Val Dice WT")
 plt.xlabel("epoch")
-plt.plot(trains_epoch, dices_wt, color="brown")
+plt.plot(epochs, dices_wt, color="brown")
+
 plt.subplot(1, 3, 3)
-plt.title("Val Mean Dice ET")
+plt.title("Val Dice ET")
 plt.xlabel("epoch")
-plt.plot(trains_epoch, dices_et, color="purple")
+plt.plot(epochs, dices_et, color="purple")
 plt.show()

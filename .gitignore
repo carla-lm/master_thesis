@@ -1,6 +1,6 @@
-/swin_model/TrainingData
-/Code version backup
-/swin_model/__pycache__
 /swin_model/checkpoints
+/swin_model/__pycache__
+/swin_model/TrainingData
 *.yml
 *.yaml
+/.idea
