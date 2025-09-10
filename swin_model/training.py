@@ -146,7 +146,7 @@ class LitSwinUNETR(pl.LightningModule):
         data, target = batch["image"], batch["label"]
         logits = self(data)
         loss = self.loss_func(logits, target)
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
     def on_validation_epoch_start(self):
@@ -184,7 +184,7 @@ if __name__ == '__main__':
 
     # Set parameters that can be passed by the user
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--batch', type=int, default=1)
     parser.add_argument('--embed_dim', type=int, default=48)
@@ -193,11 +193,9 @@ if __name__ == '__main__':
     parser.add_argument('--val_every', type=int, default=10)
     parser.add_argument('--experiment', type=int, default=1)
     parser.add_argument('--data', type=str, default='brats')
-    parser.add_argument("--load_checkpoint", dest="load_checkpoint", action="store_true")
-    parser.add_argument("--no-load_checkpoint", dest="load_checkpoint", action="store_false")
+    parser.add_argument("--resume_dir", type=str, default=None)
     parser.add_argument("--monai", dest="monai", action="store_true")
     parser.set_defaults(monai=False)
-    parser.set_defaults(load_checkpoint=False)
     args = parser.parse_args()
 
     # Define hyperparameters
@@ -258,9 +256,19 @@ if __name__ == '__main__':
     # Create checkpoint folder
     experiment = args.experiment
     run_name = f"Experiment_{experiment}"
-    logger = CSVLogger(save_dir="checkpoints", name=run_name)
-    check_dir = logger.log_dir
-    print("Saving at {}".format(check_dir))
+    if args.resume_dir is not None:  # Create a new folder for continuation so that things don't get overwritten
+        exp_name = os.path.basename(os.path.dirname(args.resume_dir))  # Experiment_X
+        old_version = os.path.basename(args.resume_dir)  # version_Y
+        new_version = f"{old_version}_cont"  # Specify that it is a continuation
+        logger = CSVLogger(save_dir=os.path.dirname(os.path.dirname(args.resume_dir)),  # checkpoints
+                           name=exp_name,
+                           version=new_version)
+        check_dir = logger.log_dir
+    else:
+        logger = CSVLogger(save_dir="checkpoints", name=run_name)
+        check_dir = logger.log_dir
+
+    print(f"Saving at {check_dir}")
     os.makedirs(check_dir, exist_ok=True)
 
     # Save best model
@@ -280,10 +288,10 @@ if __name__ == '__main__':
         every_n_epochs=5  # Save model every 5 epochs
     )
 
-    # If the load_checkpoint flag is activated, resume training from last.ckpt
+    # If resume_dir is passed, resume training from last.ckpt from specified directory
     resume_ckpt = None
-    if args.load_checkpoint:
-        last_ckpt = os.path.join(check_dir, "last.ckpt")
+    if args.resume_dir is not None:
+        last_ckpt = os.path.join(args.resume_dir, "last.ckpt")
         if os.path.exists(last_ckpt):
             print(f"Resuming training from {last_ckpt}")
             resume_ckpt = last_ckpt
