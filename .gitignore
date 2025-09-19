@@ -4,3 +4,4 @@
 *.yml
 *.yaml
 /.idea
+swin_model/tester.py
