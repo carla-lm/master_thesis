@@ -5,3 +5,4 @@
 *.yaml
 /.idea
 swin_model/tester.py
+/swin_model/Figures

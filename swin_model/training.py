@@ -9,7 +9,7 @@ from functools import partial
 from monai.transforms import (AsDiscrete, Activations)
 from monai.losses import DiceLoss, DiceCELoss
 from monai.inferers import sliding_window_inference
-from monai.metrics import DiceMetric
+from monai.metrics import DiceMetric, MeanIoU
 from monai.data import decollate_batch
 from monai.utils.enums import MetricReduction
 from monai.networks.nets import SwinUNETR
@@ -18,7 +18,7 @@ from data_loading import data_loader
 
 
 class LitSwinUNETR(pl.LightningModule):
-    def __init__(self, model, dataset, lr, epochs, roi, sw_batch_size, infer_overlap):
+    def __init__(self, model=None, dataset="numorph", lr=1e-4, epochs=200, roi=(64,64,64), sw_batch_size=4, infer_overlap=0.5):
         super().__init__()
         self.model = model
         self.lr = lr
@@ -26,6 +26,7 @@ class LitSwinUNETR(pl.LightningModule):
         self.epochs = epochs
         if dataset == "brats":
             self.loss_func = DiceLoss(to_onehot_y=False, sigmoid=True)
+
         elif dataset == "numorph":
             self.loss_func = DiceCELoss(sigmoid=True, squared_pred=True, lambda_dice=0.5, lambda_ce=0.5)
 
@@ -33,8 +34,11 @@ class LitSwinUNETR(pl.LightningModule):
         self.post_pred = AsDiscrete(argmax=False, threshold=0.5)
         self.dice_metric = DiceMetric(include_background=(dataset == "brats"), reduction=MetricReduction.MEAN_BATCH,
                                       get_not_nans=True)
+        self.jaccard_metric = MeanIoU(include_background=(dataset == "brats"), reduction=MetricReduction.MEAN_BATCH)
         self.model_inferer = partial(sliding_window_inference, roi_size=roi, sw_batch_size=sw_batch_size,
                                      predictor=self.model, overlap=infer_overlap)
+
+        self.save_hyperparameters(ignore=['model'])  # This saves everything to the checkpoint (and no model duplicate)
 
     def forward(self, x):
         return self.model(x)
@@ -48,6 +52,7 @@ class LitSwinUNETR(pl.LightningModule):
 
     def on_validation_epoch_start(self):
         self.dice_metric.reset()
+        self.jaccard_metric.reset()
 
     def validation_step(self, batch, batch_idx):
         data, target = batch["image"], batch["label"]
@@ -55,12 +60,19 @@ class LitSwinUNETR(pl.LightningModule):
         val_labels_list = decollate_batch(target)
         val_outputs_list = decollate_batch(logits)
         val_output_convert = [self.post_pred(self.post_sigmoid(val_tensor)) for val_tensor in val_outputs_list]
+        val_loss = self.loss_func(logits, target)
+        self.log("val_loss", val_loss, on_epoch=True, prog_bar=True, logger=True)
         self.dice_metric(y_pred=val_output_convert, y=val_labels_list)
+        self.jaccard_metric(y_pred=val_output_convert, y=val_labels_list)
+
         return logits
 
     def on_validation_epoch_end(self):
         dice_score, _ = self.dice_metric.aggregate()
+        jaccard_score = self.jaccard_metric.aggregate()
         mean_dice = np.mean(dice_score.cpu().numpy())
+        mean_jaccard = np.mean(jaccard_score.cpu().numpy())
+
         if self.dataset == "brats":
             dice_tc, dice_wt, dice_et = dice_score.cpu().numpy()
             self.log("val_dice_tc", dice_tc)
@@ -70,6 +82,8 @@ class LitSwinUNETR(pl.LightningModule):
 
         elif self.dataset == "numorph":
             self.log("val_dice_avg", mean_dice)
+
+        self.log("val_jaccard_avg", mean_jaccard)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=1e-5)
@@ -116,11 +130,15 @@ if __name__ == '__main__':
 
     # Set relevant paths and load data
     if args.data == "brats":
+        in_channels = 4
+        out_channels = 3
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_brats")  # Path is current directory + data_brats
         split_file = os.path.join(data_dir, "data_split.json")  # Json path is data directory + json filename
         train_loader, val_loader = data_loader(dataset_type=args.data, batch_size=batch_size, data_dir=data_dir,
                                                split_file=split_file, fold=fold, roi=roi)
     elif args.data == "numorph":
+        in_channels = 1
+        out_channels = 1
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_numorph")
         train_loader, val_loader = data_loader(dataset_type=args.data, batch_size=batch_size, data_dir=data_dir,
                                                roi=roi)
@@ -128,14 +146,14 @@ if __name__ == '__main__':
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_selma")
 
     else:
-        raise ValueError("No correct dataset has been provided")
+        raise ValueError("Unknown dataset")
 
     # Initialize model
     if args.monai:
         print("Using MONAI's SwinUNETR model")
         model = SwinUNETR(
-            in_channels=1,
-            out_channels=1,
+            in_channels=in_channels,
+            out_channels=out_channels,
             feature_size=feature_size,
             drop_rate=0.0,
             attn_drop_rate=0.0,
@@ -145,12 +163,12 @@ if __name__ == '__main__':
     else:
         print("Using custom SwinUNETR model")
         model = SwinUNETR3D(
-            in_channels=1,
+            in_channels=in_channels,
             patch_size=patch_size,
             embed_dims=embed_dims,
             num_heads=num_heads,
             window_size=window_size,
-            num_classes=1
+            num_classes=out_channels
         )
 
     # Set up lightning modules

@@ -34,8 +34,8 @@ def get_transforms(dataset_type, roi):
             T.LoadImaged(keys=["image", "label"]),
             T.EnsureChannelFirstd(keys=["image", "label"]),  # This adds the single channel as a fourth dimension
             T.CropForegroundd(keys=["image", "label"], source_key="image",
-                              k_divisible=roi, allow_smaller=True),
-            T.RandSpatialCropd(keys=["image", "label"], roi_size=roi, random_size=False),
+                              k_divisible=[roi[0], roi[1], roi[2]], allow_smaller=True),
+            T.RandSpatialCropd(keys=["image", "label"], roi_size=[roi[0], roi[1], roi[2]], random_size=False),
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
@@ -77,7 +77,7 @@ def data_split_brats(data_dir, split_file, fold):
     return train, val
 
 
-def data_split_numorph(data_dir, test_size=0.2, seed=42):
+def data_split_numorph(data_dir, test_size, seed):
     pairs = [("c075_images_final_224_64", "c075_cen_final_224_64"),
              ("c121_images_final_224_64", "c121_cen_final_224_64_1"), ]
 
@@ -96,14 +96,14 @@ def data_split_numorph(data_dir, test_size=0.2, seed=42):
     return train, val
 
 
-def data_loader(dataset_type, batch_size, roi, data_dir, split_file=None, fold=None, test_size=0.2, seed=42):
+def data_loader(dataset_type, batch_size, roi, data_dir, split_file=None, fold=None):
     if dataset_type == "brats":
         if split_file is None or fold is None:
             raise ValueError("For the BraTS dataset you must provide a split file and a fold")
         train_files, val_files = data_split_brats(data_dir, split_file, fold)
 
     elif dataset_type == "numorph":
-        train_files, val_files = data_split_numorph(data_dir, test_size, seed)
+        train_files, val_files = data_split_numorph(data_dir, test_size=0.2, seed=42)
 
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")
@@ -119,3 +119,24 @@ def data_loader(dataset_type, batch_size, roi, data_dir, split_file=None, fold=N
                                  num_workers=8, pin_memory=True, persistent_workers=True)
 
     return train_loader, val_loader
+
+
+def eval_data_loader(dataset_type, roi, data_dir, split_file=None, fold=None):
+    # Load the validation files as test data
+    if dataset_type == "brats":
+        if split_file is None or fold is None:
+            raise ValueError("For the BraTS dataset you must provide a split file and a fold")
+        _, test_files = data_split_brats(data_dir, split_file, fold)
+    elif dataset_type == "numorph":
+        _, test_files = data_split_numorph(data_dir, test_size=0.2, seed=42)
+    else:
+        raise ValueError(f"Unknown dataset type: {dataset_type}")
+
+    # Use only deterministic transforms (same as val_transforms)
+    _, test_trans = get_transforms(dataset_type, roi)
+
+    test_dataset = data.Dataset(data=test_files, transform=test_trans)
+    test_loader = data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=8, pin_memory=True)
+
+    print(f"Loaded {len(test_files)} test samples")
+    return test_loader

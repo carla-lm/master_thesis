@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from data_loading import get_transforms
 
 
-def visualize_data_numorph(data_dir):
+def visualize_data_numorph(data_dir, roi):
     # Define samples to be visualized
     img_path = os.path.join(data_dir, "c075_images_final_224_64/c0202_Training-Top3-[00x02].nii")
     label_path = os.path.join(data_dir, "c075_cen_final_224_64/c0202_Training-Top3-[00x02].nii")
@@ -16,7 +16,7 @@ def visualize_data_numorph(data_dir):
 
     # Apply the transforms to the sample
     sample_dict = {"image": img_path, "label": label_path}
-    transforms = get_transforms(dataset_type="numorph", roi=(64, 64, 64))[0]  # apply the train transforms
+    transforms = get_transforms(dataset_type="numorph", roi=roi)[0]  # apply the train transforms
     transformed = transforms(sample_dict)
     img_t = transformed["image"]
     label_t = transformed["label"]
@@ -46,7 +46,7 @@ def visualize_data_numorph(data_dir):
     plt.show()
 
 
-def visualize_data_brats(data_dir):
+def visualize_data_brats(data_dir, roi):
     # Define samples to be visualized
     img_path = os.path.join(data_dir, "BraTS2021_00006/BraTS2021_00006_flair.nii.gz")
     label_path = os.path.join(data_dir, "BraTS2021_00006/BraTS2021_00006_seg.nii.gz")
@@ -65,7 +65,7 @@ def visualize_data_brats(data_dir):
         "label": os.path.join(data_dir, "BraTS2021_00006/BraTS2021_00006_seg.nii.gz")
     }
     # Apply the transforms to the sample
-    preview_trans = get_transforms(dataset_type="brats", roi=(128, 128, 128))
+    preview_trans = get_transforms(dataset_type="brats", roi=roi)
     transformed = preview_trans[0](image_dict)  # 0 for all transforms, 1 for deterministic transforms
     img_t = transformed["image"]
     label_t = transformed["label"]
