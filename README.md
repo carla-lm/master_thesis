@@ -37,17 +37,18 @@ There are several flags available to change the training parameters
 * --roi: set the size of the training samples (default = [128, 128, 64])
 * --val_every: set how often the validation epoch will be performed (default = 10)
 * --experiment: set the experiment number for checkpointing purposes (default = 1)
-* --data: set which dataset will be used (default: 'numorph')
+* --data: set which dataset will be used (required)
 * --resume_dir: set from which folder the checkpoint will be loaded
 * --monai: if passed, the MONAI'S SwinUNETR model will be used instead of the custom model
 ### Testing
 * Basic testing command: runs the testing with default parameters and custom model for the indicated dataset → python testing.py --data DATASET --ckpt_path CKPT_PATH
+
 There are several flags available to change the testing parameters:
-* --data: set which dataset will be used (default: 'numorph')
+* --data: set which dataset will be used (required)
 * --fold: set which BraTS samples will be part of the validation set (default = 1)
 * --roi: set the size of the testing samples (default = [128, 128, 64])
 * --monai: if passed, the MONAI'S SwinUNETR model will be used instead of the custom model
-* --ckpt_path: set from which folder the pretrained model weights will be loaded
+* --ckpt_path: set from which folder the pretrained model weights will be loaded (required)
 * --num_samples: set how many samples from the validation set will be used for testing the model
 ## Model Architecture
 ![screenshot](swin_model/assets/swin_unetr.png)
