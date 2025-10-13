@@ -38,7 +38,7 @@ class LitSwinUNETR(pl.LightningModule):
         self.model_inferer = partial(sliding_window_inference, roi_size=roi, sw_batch_size=sw_batch_size,
                                      predictor=self.model, overlap=infer_overlap)
 
-        self.save_hyperparameters(ignore=['model'])  # This saves everything to the checkpoint (and no model duplicate)
+        self.save_hyperparameters()  # This saves everything to the checkpoint
 
     def forward(self, x):
         return self.model(x)
@@ -107,7 +107,7 @@ if __name__ == '__main__':
     parser.add_argument('--roi', type=int, nargs=3, default=[128, 128, 64])
     parser.add_argument('--val_every', type=int, default=10)
     parser.add_argument('--experiment', type=int, default=1)
-    parser.add_argument('--data', type=str, default='numorph')
+    parser.add_argument('--data', type=str, required=True)
     parser.add_argument("--resume_dir", type=str, default=None)
     parser.add_argument("--monai", dest="monai", action="store_true")
     parser.set_defaults(monai=False)

@@ -5,7 +5,7 @@ import pandas as pd
 matplotlib.use("TkAgg")
 
 # Load file with training data
-log_dir = os.path.join(os.getcwd(), "checkpoints", "Custom_Swin_Lit_Numorph", "version_3")
+log_dir = os.path.join(os.getcwd(), "checkpoints", "Custom_Swin_Lit_Brats", "version_3")
 metrics_file = os.path.join(log_dir, "metrics.csv")
 df = pd.read_csv(metrics_file)
 
@@ -51,9 +51,9 @@ if "val_jaccard_avg" in val_df.columns:
     plt.plot(val_epochs, val_df["val_jaccard_avg"].values, label="Mean Jaccard", color="orange", linestyle=":")
 
 
-plt.title("Validation Dice Scores")
+plt.title("Validation Dice and Jaccard Scores")
 plt.xlabel("Epoch")
-plt.ylabel("Dice")
+plt.ylabel("Score")
 plt.legend()
 plt.grid(True)
 plt.ylim(0, 1)
