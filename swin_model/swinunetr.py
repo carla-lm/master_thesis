@@ -4,23 +4,13 @@ from torch.nn.init import trunc_normal_
 import torch.nn.functional as F
 
 
-# Notation: input is 3D image with shape (H, W, D, S) (height, width, depth, channels), there will be
-# batches so the input has shape (B, H, W, D, S). For convenience, we use (B, S, D, H, W) in the decoder stage
-# as that is the format that convolution functions require.
-# The Swin UNETR creates non-overlapping patches of the input data and uses an embedding layer + window partition
-# to create windows with a desired size for computing the self-attention.
-# The encoded feature representations in the Swin transformer are fed to a CNN-decoder
-# via skip connection at multiple resolutions. Final segmentation output consists of as many
-# output channels as element types we want to segment.
-
-
 class PatchEmbedding3D(nn.Module):
     # Patch size and embedding dimension (defined as C in the paper) are modifiable hyperparameters
     def __init__(self, in_channels, patch_size, embed_dim):
         super().__init__()
         self.patch_size = patch_size
         self.skip_embed = nn.Sequential(nn.Conv3d(in_channels, embed_dim, kernel_size=3, padding=1),
-                                            nn.InstanceNorm3d(embed_dim), nn.GELU())
+                                        nn.InstanceNorm3d(embed_dim), nn.GELU())
         # self.skip_embed = ResBlock(in_channels, embed_dim)  # So it is consistent with other skips, and more robust
         self.patch_embed = nn.Conv3d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
 
@@ -345,7 +335,7 @@ class SwinUNETREncoder3D(nn.Module):  # Whole encoding pipeline
         skips = []
         skip_embed, x = self.patch_embed(x)
         skips.extend([skip_embed, x])
-        # print("Patch Embedding Output Shape:", x.shape)
+        print("Patch Embedding Output Shape:", x.shape)
         for i in range(self.num_stages):
             x = self.trans_blocks[i](x)
             # print(f"Stage {i + 1} Output Shape (before merging):", x.shape)
@@ -414,14 +404,14 @@ class SwinUNETR3D(nn.Module):
         self.seg_head = SegmentationHead(in_channels=embed_dims[0], num_classes=num_classes)
 
     def forward(self, x):
-        # print("Raw Input Shape:", x.shape)
+        print("Raw Input Shape:", x.shape)
         x = x.permute(0, 3, 4, 2, 1).contiguous()  # Input has shape (B, C, D, H, W), make it (B, H, W, D, C)
-        # print("Encoder-ready Input Shape:", x.shape)
+        print("Encoder-ready Input Shape:", x.shape)
         # Encoding Stage (Linear Embedding + Swin Transformers + Merging Layers)
         encoder_output, skips = self.encoder(x)
-        # print("Encoder Output Shape:", encoder_output.shape)
+        print("Encoder Output Shape:", encoder_output.shape)
         # for i, skip in enumerate(skips):
-            # print(f"Skip {i + 1} shape: {skip.shape}")
+        # print(f"Skip {i + 1} shape: {skip.shape}")
 
         # Make Skips and Output Shape (B, C, D, H, W) for Decoder
         encoder_output = encoder_output.permute(0, 4, 3, 1, 2).contiguous()  # (B, C, D, H, W)
@@ -429,7 +419,7 @@ class SwinUNETR3D(nn.Module):
         encoder_output, skips = self.processor(encoder_output, skips)
         # print("Processed Encoder Output Shape:", encoder_output.shape)
         # for i, skip in enumerate(skips):
-            # print(f"Processed Skip {i + 1} shape: {skip.shape}")
+        # print(f"Processed Skip {i + 1} shape: {skip.shape}")
 
         # Decoding Stage (Upsampling Blocks + ResCNN Blocks)
         decoder_output = self.decoder(encoder_output, skips)
@@ -437,30 +427,36 @@ class SwinUNETR3D(nn.Module):
 
         # Obtain Final Segmented Output
         final_output = self.seg_head(decoder_output)
-        # print("Final Output Shape:", final_output.shape)
+        print("Final Output Shape:", final_output.shape)
 
         return final_output
 
 
-### TESTING SECTION ###
+# TESTING SECTION
 if __name__ == "__main__":
-    # Dummy variables
-    input_shape = (2, 4, 100, 100, 100)
+    import os
+    import nibabel as nib
+
+    # Load an example image
+    data_dir = os.path.join(os.getcwd(), "TrainingData", "data_brats")  # Path is current directory + data_brats
+    img_path = os.path.join(data_dir, "BraTS2021_00006/BraTS2021_00006_flair.nii.gz")
+    img = nib.load(img_path).get_fdata()  # (H, W, D)
+    img = torch.tensor(img, dtype=torch.float32)
+    img = img.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions (1, 1, H, W, D)
+    # Define variables
     patch_size = (2, 2, 2)
     embed_dims = [48, 96, 192, 384, 768]
     num_heads = [3, 6, 12, 24]
     window_size = (7, 7, 7)
     num_classes = 3
-    x = torch.randn(input_shape)
 
-    # Instantiate model
+    # Instantiate and run model
     model = SwinUNETR3D(
-        in_channels=input_shape[1],
+        in_channels=img.shape[1],
         patch_size=patch_size,
         embed_dims=embed_dims,
         num_heads=num_heads,
         window_size=window_size,
         num_classes=num_classes
     )
-
-    output = model(x)
+    output = model(img)
