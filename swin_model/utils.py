@@ -1,9 +1,10 @@
 import os
 import nibabel as nib
+import torch.nn as nn
 import matplotlib
 import matplotlib.pyplot as plt
 from data_loading import get_transforms
-matplotlib.use("TkAgg")
+# matplotlib.use("TkAgg")
 
 
 def visualize_data_numorph(data_dir, roi):
@@ -95,27 +96,21 @@ def visualize_data_brats(data_dir, roi):
     plt.show()
 
 
-def visualize_mask_overlay(x, mask, recon, patch_size):
+def visualize_mask_overlay(x, mask, recon):
     # Convert tensors to numpy arrays and discard batch and channel dimensions
     x = x[0, 0].detach().cpu().numpy()  # (B, C, D, H, W) --> (D, H, W)
     recon = recon[0, 0].detach().cpu().numpy()  # (B, C, D, H, W) --> (D, H, W)
-    mask = mask[0, ..., 0].detach().cpu().numpy()  # (B, H', W', D', C) --> (H', W', D')
-    mask = mask.transpose(2, 0, 1)  # (H', W', D') --> (D', H', W')
-
-    # Upsample mask to input resolution: (D', H', W') --> (D'*pz, H'*ph, W'*pw)
-    mask_upsampled = mask.repeat(patch_size[2], axis=0).repeat(patch_size[0], axis=1).repeat(patch_size[1], axis=2)
-    # Crop mask to match input size, because if padding was added, upsampling will be bigger than input
-    D, H, W = x.shape
-    mask_upsampled = mask_upsampled[:D, :H, :W]
+    mask = mask[0, 0].detach().cpu().numpy()  # (B, 1, D, H, W) --> (D, H, W)
 
     # Select middle z-slice
-    mid_z = D // 2
-    x_slice = x[mid_z]
-    recon_slice = recon[mid_z]
-    mask_slice = mask_upsampled[mid_z]
+    mid_z = x.shape[2] // 2
+    x_slice = x[:, :, mid_z]
+    recon_slice = recon[:, :, mid_z]
+    mask_slice = mask[:, :, mid_z]
 
     # Overlay the mask onto the image
     overlay = (x_slice - x_slice.min()) / (x_slice.max() - x_slice.min())  # Normalize image values to [0, 1]
+    recon_slice = (recon_slice - recon_slice.min()) / (recon_slice.max() - recon_slice.min())
     overlay_masked = overlay.copy()  # Save original normalized image
     overlay_masked[mask_slice > 0] = 1.0  # Set image voxels where mask is applied to value 1
 
@@ -135,3 +130,20 @@ def visualize_mask_overlay(x, mask, recon, patch_size):
 
     plt.tight_layout()
     plt.show()
+
+
+def reconstruction_loss(img, recon, mask):
+    # Normalize image and reconstruction
+    img_min = img.amin(dim=(-1, -2, -3), keepdim=True)
+    img_max = img.amax(dim=(-1, -2, -3), keepdim=True)
+    img = (img - img_min) / (img_max - img_min + 1e-8)
+    recon_min = recon.amin(dim=(-1, -2, -3), keepdim=True)
+    recon_max = recon.amax(dim=(-1, -2, -3), keepdim=True)
+    recon = (recon - recon_min) / (recon_max - recon_min + 1e-8)
+    # Apply mask (only compare masked voxels)
+    mask = mask.to(dtype=img.dtype)
+    img_masked = img * mask
+    recon_masked = recon * mask
+    loss_fn = nn.MSELoss()
+    loss = loss_fn(recon_masked, img_masked)
+    return loss

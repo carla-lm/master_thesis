@@ -335,7 +335,7 @@ class SwinUNETREncoder3D(nn.Module):  # Whole encoding pipeline
         skips = []
         skip_embed, x = self.patch_embed(x)
         skips.extend([skip_embed, x])
-        print("Patch Embedding Output Shape:", x.shape)
+        # print("Patch Embedding Output Shape:", x.shape)
         for i in range(self.num_stages):
             x = self.trans_blocks[i](x)
             # print(f"Stage {i + 1} Output Shape (before merging):", x.shape)

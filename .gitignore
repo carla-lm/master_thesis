@@ -6,3 +6,7 @@
 /.idea
 swin_model/tester.py
 /swin_model/Figures
+/swin_model/checkpoints_ssl
+/MasterLaTeXEnglish_Update
+/swin_model/SwinMAE
+swin_model/overfit_test.py
