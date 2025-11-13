@@ -6,16 +6,18 @@ from sklearn.model_selection import train_test_split
 from data_loading import get_transforms
 
 
-def get_ssl_transforms(dataset_type, roi):  # No geometric transforms for MAE SSL
+def get_ssl_transforms(roi):  # No geometric transforms for MAE SSL
     train_transforms = T.Compose([T.LoadImaged(keys=["image"]),
                                   T.EnsureChannelFirstd(keys=["image"]),
+                                  T.Orientationd(keys=["image"], axcodes="RAS"),
+                                  T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0,
+                                                                    b_max=1.0, clip=True, channel_wise=True),
+                                  T.SpatialPadd(keys="image", spatial_size=[roi[0], roi[1], roi[2]]),
                                   T.CropForegroundd(keys=["image"], source_key="image",
                                                     k_divisible=[roi[0], roi[1], roi[2]], allow_smaller=True),
-                                  T.RandSpatialCropd(keys=["image"], roi_size=[roi[0], roi[1], roi[2]],
-                                                     random_size=False),
-                                  T.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
-                                  T.RandScaleIntensityd(keys="image", factors=0.1, prob=1.0),
-                                  T.RandShiftIntensityd(keys="image", offsets=0.1, prob=1.0),
+                                  T.RandSpatialCropSamplesd(keys=["image"], roi_size=[roi[0], roi[1], roi[2]],
+                                                            random_size=False, random_center=True, num_samples=4),
+                                  T.ToTensord(keys=["image"]),
                                   ])
 
     return train_transforms
@@ -79,25 +81,33 @@ def ssl_data_loader(dataset_type, batch_size, roi, data_dir, split_file=None, fo
             raise ValueError("For the BraTS dataset you must provide a split file and a fold")
         ssl_files, train_files, val_files = data_split_brats_ssl(data_dir, split_file, fold,
                                                                  finetune_val_ratio=0.2, seed=42)
+        ssl_train_files, ssl_val_files = train_test_split(ssl_files, test_size=0.1, random_state=42)
 
     elif dataset_type == "numorph":
         ssl_files, train_files, val_files = data_split_numorph_ssl(data_dir, pretrain_ratio=0.8,
                                                                    finetune_val_ratio=0.2, seed=42)
+        ssl_train_files, ssl_val_files = train_test_split(ssl_files, test_size=0.1, random_state=42)
 
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")
 
-    print(f"SSL pretrain samples: {len(ssl_files)} | Fine-tune training samples: {len(train_files)} | Fine-tune "
+    print(f"SSL pretrain training samples: {len(ssl_train_files)} "
+          f"| SSL pretrain validation samples: {len(ssl_val_files)}"
+          f"| Fine-tune training samples: {len(train_files)} | Fine-tune "
           f"validation samples: {len(val_files)}")
 
     # Apply transforms to each set
-    ssl_transforms = get_ssl_transforms(dataset_type, roi)
+    ssl_transforms = get_ssl_transforms(roi)
     train_transforms, val_transforms = get_transforms(dataset_type, roi)
 
     # Create DataLoaders for each set
-    ssl_dataset = data.Dataset(data=ssl_files, transform=ssl_transforms)
-    ssl_dataloader = data.DataLoader(ssl_dataset, batch_size=batch_size, shuffle=True,
-                                     num_workers=8, pin_memory=True, persistent_workers=True)
+    ssl_train_dataset = data.Dataset(data=ssl_train_files, transform=ssl_transforms)
+    ssl_train_dataloader = data.DataLoader(ssl_train_dataset, batch_size=batch_size, shuffle=True,
+                                           num_workers=8, pin_memory=True, persistent_workers=True)
+
+    ssl_val_dataset = data.Dataset(data=ssl_val_files, transform=ssl_transforms)
+    ssl_val_dataloader = data.DataLoader(ssl_val_dataset, batch_size=1, shuffle=False,
+                                         num_workers=8, pin_memory=True, persistent_workers=True)
 
     train_dataset = data.Dataset(data=train_files, transform=train_transforms)
     train_dataloader = data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
@@ -107,5 +117,4 @@ def ssl_data_loader(dataset_type, batch_size, roi, data_dir, split_file=None, fo
     val_dataloader = data.DataLoader(val_dataset, batch_size=1, shuffle=False,
                                      num_workers=8, pin_memory=True, persistent_workers=True)
 
-    return ssl_dataloader, train_dataloader, val_dataloader
-
+    return ssl_train_dataloader, ssl_val_dataloader, train_dataloader, val_dataloader

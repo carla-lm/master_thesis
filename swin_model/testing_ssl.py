@@ -6,15 +6,33 @@ from ssl_training import SSLLitSwinUNETR
 from ssl_data_loading import ssl_data_loader
 from utils import visualize_mask_overlay
 
+
+def pad_to_window(x, window_size=(8, 8, 8)):
+    B, C, D, H, W = x.shape
+    pad_d = (window_size[0] - D % window_size[0]) % window_size[0]
+    pad_h = (window_size[1] - H % window_size[1]) % window_size[1]
+    pad_w = (window_size[2] - W % window_size[2]) % window_size[2]
+    x = torch.nn.functional.pad(x, (0, pad_w, 0, pad_h, 0, pad_d))
+    return x, (pad_d, pad_h, pad_w)
+
+
+def unpad(x, pads):
+    pad_d, pad_h, pad_w = pads
+    if pad_d: x = x[:, :, :-pad_d, :, :]
+    if pad_h: x = x[:, :, :, :-pad_h, :]
+    if pad_w: x = x[:, :, :, :, :-pad_w]
+    return x
+
+
 if __name__ == '__main__':
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
     print(f"Using device: {device}")
     torch.backends.cudnn.benchmark = True
     torch.set_float32_matmul_precision('medium')  # Trade off precision for performance
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default="brats")
-    parser.add_argument("--roi", type=int, nargs=3, default=[128, 128, 64])
+    parser.add_argument("--roi", type=int, nargs=3, default=[128, 128, 128])
     parser.add_argument('--fold', type=int, default=1)
     parser.add_argument("--ckpt_path", type=str)
     parser.add_argument("--num_samples", type=int, default=1)
@@ -23,18 +41,19 @@ if __name__ == '__main__':
     fold = args.fold
     roi = tuple(args.roi)
     patch_size = (2, 2, 2)
-    ckpt_path = (r"D:\Master_Thesis\master_thesis\swin_model\checkpoints_ssl\Brats\version_0\best-model-epoch=95"
-                 r"-train_loss=0.1600.ckpt")
+    ckpt_path = (r"D:\Master_Thesis\master_thesis\swin_model\checkpoints_ssl\Brats "
+                 r"Mine\E1v6_mask_-1\best-model-epoch=144-train_loss=0.0020.ckpt")
 
     if args.data == "brats":
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_brats")
         split_file = os.path.join(data_dir, "data_split.json")
-        _, _, test_loader = ssl_data_loader(dataset_type=args.data, batch_size=1, roi=roi, data_dir=data_dir,
-                                      split_file=split_file, fold=fold)  # Load the test data (same as validation data)
+        _, test_loader, _, _ = ssl_data_loader(dataset_type=args.data, batch_size=1, roi=roi, data_dir=data_dir,
+                                               split_file=split_file,
+                                               fold=fold)  # Load the test data (same as validation data)
 
     elif args.data == "numorph":
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_numorph")
-        _, _, test_loader = ssl_data_loader(dataset_type=args.data, batch_size=1, roi=roi, data_dir=data_dir)
+        _, test_loader, _, _ = ssl_data_loader(dataset_type=args.data, batch_size=1, roi=roi, data_dir=data_dir)
 
     else:
         raise ValueError("Unknown dataset")
@@ -55,11 +74,10 @@ if __name__ == '__main__':
     with torch.no_grad():
         for idx, sample_idx in enumerate(selected_indices, start=1):
             batch = test_loader.dataset[sample_idx]
-            x = torch.as_tensor(batch["image"]).unsqueeze(0).to(device)  # (B, C, D, H, W)
+            x = batch[0]["image"].unsqueeze(0).to(device)  # Add batch dimension (B, C, D, H, W)
             print(x.shape)
-            recon, mask = model(x)
-            print(recon.shape)
-            print(mask.shape)
+            x_pad, pads = pad_to_window(x, window_size=(8, 8, 8))
+            recon, mask = model(x_pad)
+            recon = unpad(recon, pads)
+            mask = unpad(mask, pads)
             visualize_mask_overlay(x, mask, recon)
-
-

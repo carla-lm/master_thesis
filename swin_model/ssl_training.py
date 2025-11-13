@@ -55,12 +55,13 @@ if __name__ == '__main__':
 
     # Set parameters that can be passed by the user
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=200)
-    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--epochs', type=int, default=150)
+    parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--batch', type=int, default=1)
     parser.add_argument('--embed_dim', type=int, default=48)
     parser.add_argument('--fold', type=int, default=1)
-    parser.add_argument('--roi', type=int, nargs=3, default=[128, 128, 64])
+    parser.add_argument('--roi', type=int, nargs=3, default=[64, 64, 64])
+    parser.add_argument('--mask_ratio', type=float, default=0.75)
     parser.add_argument('--experiment', type=int, default=1)
     parser.add_argument('--data', type=str, default="numorph")
     parser.add_argument("--resume_dir", type=str, default=None)
@@ -83,16 +84,19 @@ if __name__ == '__main__':
         out_channels = in_channels  # In SSL I am reconstructing the original image, not predicting classes
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_brats")  # Path is current directory + data_brats
         split_file = os.path.join(data_dir, "data_split.json")  # Json path is data directory + json filename
-        ssl_loader, train_loader, val_loader = ssl_data_loader(dataset_type=args.data, batch_size=batch_size,
-                                                               data_dir=data_dir,
-                                                               split_file=split_file, fold=fold, roi=roi)
+        ssl_train_loader, ssl_val_loader, train_loader, val_loader = ssl_data_loader(dataset_type=args.data,
+                                                                                     batch_size=batch_size,
+                                                                                     data_dir=data_dir,
+                                                                                     split_file=split_file, fold=fold,
+                                                                                     roi=roi)
     elif args.data == "numorph":
         in_channels = 1
         out_channels = in_channels  # In SSL I am reconstructing the original image, not predicting classes
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_numorph")
-        ssl_loader, train_loader, val_loader = ssl_data_loader(dataset_type=args.data, batch_size=batch_size,
-                                                               data_dir=data_dir,
-                                                               roi=roi)
+        ssl_train_loader, ssl_val_loader, train_loader, val_loader = ssl_data_loader(dataset_type=args.data,
+                                                                                     batch_size=batch_size,
+                                                                                     data_dir=data_dir,
+                                                                                     roi=roi)
     elif args.data == "selma":
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_selma")
 
@@ -102,7 +106,7 @@ if __name__ == '__main__':
     # Set up lightning module
     lit_model = SSLLitSwinUNETR(in_channels=in_channels, embed_dims=embed_dims,
                                 num_heads=num_heads, patch_size=patch_size, window_size=window_size,
-                                epochs=epochs, lr=lr, mask_ratio=0.5)
+                                epochs=epochs, lr=lr, mask_ratio=0.75)
 
     # Create checkpoint folder
     experiment = args.experiment
@@ -160,4 +164,4 @@ if __name__ == '__main__':
         precision="16-mixed",  # Automatic mixed precision for faster training
     )
 
-    trainer.fit(lit_model, ssl_loader, ckpt_path=resume_ckpt)
+    trainer.fit(lit_model, ssl_train_loader, ckpt_path=resume_ckpt)

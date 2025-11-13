@@ -10,3 +10,4 @@ swin_model/tester.py
 /MasterLaTeXEnglish_Update
 /swin_model/SwinMAE
 swin_model/overfit_test.py
+/swin_model/SSLSwinMM

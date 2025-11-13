@@ -5,7 +5,7 @@ import pandas as pd
 matplotlib.use("TkAgg")
 
 # Load file with training data
-log_dir = os.path.join(os.getcwd(), "checkpoints_ssl", "Brats", "version_2")
+log_dir = os.path.join(os.getcwd(), "checkpoints_ssl", "Brats", "version_0")
 metrics_file = os.path.join(log_dir, "metrics.csv")
 df = pd.read_csv(metrics_file)
 
@@ -25,7 +25,6 @@ plt.xlabel("Epoch")
 plt.ylabel("Loss")
 plt.legend()
 plt.grid(True)
-plt.ylim(0, 1)
 plt.show()
 
 # Extract the validation metrics

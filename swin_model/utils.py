@@ -25,7 +25,6 @@ def visualize_data_numorph(data_dir, roi):
     print(f"Transformed image shape: {img_t.shape}, transformed label shape: {label_t.shape}")
 
     # Plot raw image and label
-    matplotlib.use("TkAgg")
     plt.figure(figsize=(12, 4))
 
     plt.subplot(1, 3, 1)
@@ -71,10 +70,9 @@ def visualize_data_brats(data_dir, roi):
     transformed = preview_trans[0](image_dict)  # 0 for all transforms, 1 for deterministic transforms
     img_t = transformed["image"]
     label_t = transformed["label"]
-    print(f"Transformed image shape: {img_t.shape}, transformed label shape: {label_t.shape}") # Should be (C, H, W, D)
+    print(f"Transformed image shape: {img_t.shape}, transformed label shape: {label_t.shape}")  # Should be (C, H, W, D)
 
     # Plot raw image and label
-    matplotlib.use("TkAgg")  # To see figure live
     plt.figure(figsize=(12, 4))
 
     plt.subplot(1, 3, 1)
@@ -96,7 +94,10 @@ def visualize_data_brats(data_dir, roi):
     plt.show()
 
 
-def visualize_mask_overlay(x, mask, recon):
+def visualize_mask_overlay(x, mask, recon, filename="overlay.png"):
+    # Save figure
+    save_dir = "Figures"
+    os.makedirs(save_dir, exist_ok=True)
     # Convert tensors to numpy arrays and discard batch and channel dimensions
     x = x[0, 0].detach().cpu().numpy()  # (B, C, D, H, W) --> (D, H, W)
     recon = recon[0, 0].detach().cpu().numpy()  # (B, C, D, H, W) --> (D, H, W)
@@ -109,14 +110,12 @@ def visualize_mask_overlay(x, mask, recon):
     mask_slice = mask[:, :, mid_z]
 
     # Overlay the mask onto the image
-    overlay = (x_slice - x_slice.min()) / (x_slice.max() - x_slice.min())  # Normalize image values to [0, 1]
-    recon_slice = (recon_slice - recon_slice.min()) / (recon_slice.max() - recon_slice.min())
-    overlay_masked = overlay.copy()  # Save original normalized image
-    overlay_masked[mask_slice > 0] = 1.0  # Set image voxels where mask is applied to value 1
+    overlay_masked = x_slice.copy()
+    overlay_masked[mask_slice > 0] = -0.1  # Set image voxels where mask is applied to value -0.1
 
     # Plot each image
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    axs[0].imshow(overlay, cmap='gray')
+    axs[0].imshow(x_slice, cmap='gray')
     axs[0].set_title("Original Image")
     axs[0].axis('off')
 
@@ -129,21 +128,20 @@ def visualize_mask_overlay(x, mask, recon):
     axs[2].axis('off')
 
     plt.tight_layout()
-    plt.show()
+    # plt.show()
+    # Save instead of showing
+    save_path = os.path.join(save_dir, filename)
+    plt.savefig(save_path, bbox_inches="tight", dpi=200)
+    plt.close(fig)
+    print(f"Saved overlay figure at: {save_path}")
 
 
 def reconstruction_loss(img, recon, mask):
-    # Normalize image and reconstruction
-    img_min = img.amin(dim=(-1, -2, -3), keepdim=True)
-    img_max = img.amax(dim=(-1, -2, -3), keepdim=True)
-    img = (img - img_min) / (img_max - img_min + 1e-8)
-    recon_min = recon.amin(dim=(-1, -2, -3), keepdim=True)
-    recon_max = recon.amax(dim=(-1, -2, -3), keepdim=True)
-    recon = (recon - recon_min) / (recon_max - recon_min + 1e-8)
-    # Apply mask (only compare masked voxels)
+    # Apply mask to only compare masked voxels
     mask = mask.to(dtype=img.dtype)
     img_masked = img * mask
     recon_masked = recon * mask
     loss_fn = nn.MSELoss()
     loss = loss_fn(recon_masked, img_masked)
     return loss
+

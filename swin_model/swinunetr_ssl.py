@@ -2,55 +2,40 @@ import torch
 import torch.nn as nn
 import numpy as np
 from swinunetr import SwinUNETREncoder3D
+from monai.networks.nets.swin_unetr import SwinTransformer as SwinViT
 
 
-def mask_rand_patch_3d(window_size, input_size, mask_ratio, x):
-    """
-    Patch-wise random masking in voxel space.
-
-    Args:
-        window_size (tuple): Size of the masking patches (wh, ww, wd)
-        input_size (tuple): Shape of the input (D, H, W)
-        mask_ratio (float): Fraction of patches to mask (e.g. 0.75)
-        x (torch.Tensor): Input tensor of shape (B, C, D, H, W)
-
-    Returns:
-        x_masked (torch.Tensor): Masked version of x
-        mask (torch.Tensor): Boolean mask of shape (B, 1, D, H, W)
-                             where True = masked, False = visible
-    """
-    B, C, D, H, W = x.shape
+def mask_3d(img, window_size, input_size, mask_ratio):
+    B, C, D, H, W = img.shape
     wh, ww, wd = window_size
     in_d, in_h, in_w = input_size
-
-    # Check divisibility
     if any(dim % w != 0 for dim, w in zip((in_d, in_h, in_w), (wd, wh, ww))):
         raise ValueError(f"Input {input_size} not divisible by window {window_size}")
 
-    # Define mask grid shape (number of patches along each axis)
+    # Define the mask grid shape (number of windows along each axis)
     mask_shape = [in_d // wd, in_h // wh, in_w // ww]
-    num_patches = np.prod(mask_shape).item()
+    num_windows = np.prod(mask_shape).item()
 
-    # Create a random boolean mask grid (True = masked)
-    mask_flat = np.ones(num_patches, dtype=bool)
-    masked_indices = np.random.choice(num_patches,
-                                      round(num_patches * mask_ratio),
-                                      replace=False)
-    mask_flat[masked_indices] = False  # False = visible, True = masked
-    mask_grid = mask_flat.reshape(mask_shape)  # (D//wd, H//wh, W//ww)
+    # Create a random boolean mask grid
+    mask_flat = np.zeros(num_windows, dtype=bool)
+    masked_indices = np.random.choice(num_windows,
+                                      round(num_windows * mask_ratio),
+                                      replace=False)  # Select windows to mask
+    mask_flat[masked_indices] = True  # False = visible, True = masked
+    mask_grid = mask_flat.reshape(mask_shape)  # Convert grid from 1D to 3D
 
-    # Expand each mask cell into its voxel region
+    # Propagate the window mask to all voxels in that window
     mask = np.logical_or(
         mask_grid[:, None, :, None, :, None],
         np.zeros([1, wd, 1, wh, 1, ww], dtype=bool)
-    ).reshape(in_d, in_h, in_w)
+    ).reshape(in_d, in_h, in_w)  # (num_winD, num_winH, num_winW) --> (D, H, W)
 
-    mask = torch.from_numpy(mask).to(x.device)  # (D, H, W)
+    mask = torch.from_numpy(mask).to(img.device)  # Convert to tensor and move to the same device as input
 
-    # Apply mask to input
-    x_masked = x.detach().clone()
-    x_masked[:, :, mask] = 0  # Mask voxels where mask = 1
-    mask = mask.unsqueeze(0).unsqueeze(1).repeat(B, 1, 1, 1, 1)  # (B, 1, D, H, W)
+    # Apply the mask to the input
+    x_masked = img.detach().clone()  # Copy the input
+    x_masked[:, :, mask] = -1  # Mask voxels where mask = 1. I put -1, so it does not get confused with the background 0
+    mask = mask.unsqueeze(0).unsqueeze(1).repeat(B, 1, 1, 1, 1)  # (B, 1, D, H, W), all samples in B have the same mask
 
     return x_masked, mask
 
@@ -84,6 +69,7 @@ class SSLDecoder3D(nn.Module):  # Decoder to reconstruct masked voxels from the 
 
     def forward(self, x):
         reconstruction = self.decoding_blocks(x)
+        reconstruction = torch.sigmoid(reconstruction)  # Normalize to same scale as input in [0, 1]
         return reconstruction
 
 
@@ -99,17 +85,34 @@ class SSLSwinUNETR3D(nn.Module):
         self.encoder = SwinUNETREncoder3D(in_channels=self.in_channels, patch_size=self.patch_size,
                                           embed_dims=self.embed_dims, num_heads=self.num_heads,
                                           window_size=self.window_size)
+        self.encoder_monai = self.swinViT = SwinViT(
+            in_chans=self.in_channels,
+            embed_dim=self.embed_dims[0],
+            window_size=self.window_size,
+            patch_size=self.patch_size,
+            depths=[2, 2, 2, 2],
+            num_heads=self.num_heads,
+            mlp_ratio=4.0,
+            qkv_bias=True,
+            drop_rate=0.0,
+            attn_drop_rate=0.0,
+            drop_path_rate=0.0,
+            norm_layer=torch.nn.LayerNorm,
+            use_checkpoint=True,
+            spatial_dims=3,
+        )
         self.decoder = SSLDecoder3D(decoder_dim=embed_dims[-1], out_channels=in_channels)
 
     def forward(self, x):
         # print("Raw Input Shape:", x.shape)
         # Mask the input at voxel-level
-        x_masked, mask = mask_rand_patch_3d(window_size=self.window_size, input_size=x.shape[2:],
-                                            mask_ratio=self.mask_ratio, x=x)
+        x_masked, mask = mask_3d(img=x, window_size=self.window_size, input_size=x.shape[2:],
+                                 mask_ratio=self.mask_ratio)
         # Masked input has shape (B, C, D, H, W), make it (B, H, W, D, C)
         x_masked = x_masked.permute(0, 3, 4, 2, 1).contiguous()
         # print("Encoder-ready Input Shape:", x_masked.shape)
         latent, _ = self.encoder(x_masked)  # (B, H_lat, W_lat, D_lat, C)
+        # latent = self.encoder_monai(x_masked)[4]
         # print("Encoder Output Shape:", latent.shape)
         latent = latent.permute(0, 4, 3, 1, 2).contiguous()  # (B, C, D_lat, H_lat, W_lat)
         # print("Decoder Input Shape:", latent.shape)
@@ -123,7 +126,7 @@ class SSLSwinUNETR3D(nn.Module):
 if __name__ == "__main__":
     import os
     import nibabel as nib
-    from utils import visualize_mask_overlay
+    from utils import visualize_mask_overlay, compute_intensity_range
 
     # Load an example image
     data_dir = os.path.join(os.getcwd(), "TrainingData", "data_brats")  # Path is current directory + data_brats
@@ -146,4 +149,7 @@ if __name__ == "__main__":
                            window_size=window_size,
                            mask_ratio=0.75)
     recon, mask = model(img)
+    # Normalize image for display
+    img = (img - img.min()) / (img.max() - img.min() + 1e-8)
+    recon = (recon - recon.min()) / (recon.max() - recon.min() + 1e-8)
     visualize_mask_overlay(img, mask, recon)
