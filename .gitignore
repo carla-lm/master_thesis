@@ -9,5 +9,5 @@ swin_model/tester.py
 /swin_model/checkpoints_ssl
 /MasterLaTeXEnglish_Update
 /swin_model/SwinMAE
-swin_model/overfit_test.py
+swin_model/ssl_tester.py
 /swin_model/SSLSwinMM

@@ -85,22 +85,6 @@ class SSLSwinUNETR3D(nn.Module):
         self.encoder = SwinUNETREncoder3D(in_channels=self.in_channels, patch_size=self.patch_size,
                                           embed_dims=self.embed_dims, num_heads=self.num_heads,
                                           window_size=self.window_size)
-        self.encoder_monai = self.swinViT = SwinViT(
-            in_chans=self.in_channels,
-            embed_dim=self.embed_dims[0],
-            window_size=self.window_size,
-            patch_size=self.patch_size,
-            depths=[2, 2, 2, 2],
-            num_heads=self.num_heads,
-            mlp_ratio=4.0,
-            qkv_bias=True,
-            drop_rate=0.0,
-            attn_drop_rate=0.0,
-            drop_path_rate=0.0,
-            norm_layer=torch.nn.LayerNorm,
-            use_checkpoint=True,
-            spatial_dims=3,
-        )
         self.decoder = SSLDecoder3D(decoder_dim=embed_dims[-1], out_channels=in_channels)
 
     def forward(self, x):

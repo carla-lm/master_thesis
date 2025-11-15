@@ -1,9 +1,8 @@
 import os
 import nibabel as nib
-import torch.nn as nn
-import matplotlib
 import matplotlib.pyplot as plt
 from data_loading import get_transforms
+import matplotlib
 # matplotlib.use("TkAgg")
 
 
@@ -94,9 +93,9 @@ def visualize_data_brats(data_dir, roi):
     plt.show()
 
 
-def visualize_mask_overlay(x, mask, recon, filename="overlay.png"):
+def visualize_mask_overlay(x, mask, recon, filename="overlay.png", run_name="Run"):
     # Save figure
-    save_dir = "Figures"
+    save_dir = os.path.join("Figures", run_name)
     os.makedirs(save_dir, exist_ok=True)
     # Convert tensors to numpy arrays and discard batch and channel dimensions
     x = x[0, 0].detach().cpu().numpy()  # (B, C, D, H, W) --> (D, H, W)
@@ -134,14 +133,3 @@ def visualize_mask_overlay(x, mask, recon, filename="overlay.png"):
     plt.savefig(save_path, bbox_inches="tight", dpi=200)
     plt.close(fig)
     print(f"Saved overlay figure at: {save_path}")
-
-
-def reconstruction_loss(img, recon, mask):
-    # Apply mask to only compare masked voxels
-    mask = mask.to(dtype=img.dtype)
-    img_masked = img * mask
-    recon_masked = recon * mask
-    loss_fn = nn.MSELoss()
-    loss = loss_fn(recon_masked, img_masked)
-    return loss
-

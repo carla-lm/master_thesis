@@ -6,7 +6,24 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import CSVLogger
 from swinunetr_ssl import SSLSwinUNETR3D
 from ssl_data_loading import ssl_data_loader
-from utils import reconstruction_loss
+from utils import visualize_mask_overlay
+from monai.losses import SSIMLoss
+
+ssim_loss_fn = SSIMLoss(spatial_dims=3, reduction='mean')
+mse_loss_fn = torch.nn.MSELoss()
+
+
+def reconstruction_loss(img, recon, mask, ssim_weight=0.1):
+    # Apply mask to only compare masked voxels for L1 loss
+    mask = mask.to(dtype=img.dtype)
+    img_masked = img * mask
+    recon_masked = recon * mask
+    # L1 loss on masked region only
+    loss_mse = mse_loss_fn(recon_masked, img_masked)
+    # SSIM loss on entire image
+    loss_ssim = ssim_loss_fn(img, recon + 1e-6)
+    total_loss = loss_mse + ssim_weight * loss_ssim
+    return total_loss, loss_mse, loss_ssim
 
 
 class SSLLitSwinUNETR(pl.LightningModule):
@@ -37,9 +54,27 @@ class SSLLitSwinUNETR(pl.LightningModule):
         x = batch["image"].to(self.device)
         recon, mask = self.forward(x)
         # Compute loss voxel-wise
-        loss = reconstruction_loss(x, recon, mask)
+        loss, loss_l1, loss_ssim = reconstruction_loss(x, recon, mask)
         self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train_l1", loss_l1, on_step=False, on_epoch=True)
+        self.log("train_ssim", loss_ssim, on_step=False, on_epoch=True)
         return loss
+
+    def validation_step(self, batch, batch_idx):
+        x = batch["image"].to(self.device)
+        recon, mask = self.forward(x)
+        val_loss, val_l1, val_ssim = reconstruction_loss(x, recon, mask)
+        self.log("val_loss", val_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val_l1", val_l1, on_step=False, on_epoch=True)
+        self.log("val_ssim", val_ssim, on_step=False, on_epoch=True)
+        return val_loss
+
+    def on_validation_epoch_end(self):  # Only test one sample per val epoch instead of all val batch samples
+        batch = next(iter(self.val_loader))
+        x = batch["image"][0].to(self.device)  # [0] to take the first sample in the batch
+        x = x.unsqueeze(0)  # Add batch dimension as previous line removes it
+        recon, mask = self.forward(x)
+        visualize_mask_overlay(x, mask, recon, filename=f"epoch_{self.current_epoch:03d}", run_name=lit_model.run_name)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=1e-5)
@@ -60,9 +95,10 @@ if __name__ == '__main__':
     parser.add_argument('--batch', type=int, default=1)
     parser.add_argument('--embed_dim', type=int, default=48)
     parser.add_argument('--fold', type=int, default=1)
-    parser.add_argument('--roi', type=int, nargs=3, default=[64, 64, 64])
-    parser.add_argument('--mask_ratio', type=float, default=0.75)
+    parser.add_argument('--roi', type=int, nargs=3, default=[96, 96, 96])
+    parser.add_argument('--mask_ratio', type=float, default=0.3)
     parser.add_argument('--experiment', type=int, default=1)
+    parser.add_argument('--run', type=int, default=1)
     parser.add_argument('--data', type=str, default="numorph")
     parser.add_argument("--resume_dir", type=str, default=None)
     args = parser.parse_args()
@@ -74,9 +110,10 @@ if __name__ == '__main__':
     fold = args.fold
     roi = tuple(args.roi)
     num_heads = [3, 6, 12, 24]
-    window_size = (8, 8, 8)
+    window_size = (6, 6, 6)
     patch_size = (2, 2, 2)
     embed_dims = [args.embed_dim * (2 ** i) for i in range(5)]
+    mask_ratio = args.mask_ratio
 
     # Set relevant paths and load data
     if args.data == "brats":
@@ -106,7 +143,11 @@ if __name__ == '__main__':
     # Set up lightning module
     lit_model = SSLLitSwinUNETR(in_channels=in_channels, embed_dims=embed_dims,
                                 num_heads=num_heads, patch_size=patch_size, window_size=window_size,
-                                epochs=epochs, lr=lr, mask_ratio=0.75)
+                                epochs=epochs, lr=lr, mask_ratio=mask_ratio)
+
+    # For the on_validation_epoch_end operations
+    lit_model.val_loader = ssl_val_loader
+    lit_model.run_name = f"Run_{args.run}"
 
     # Create checkpoint folder
     experiment = args.experiment
@@ -129,8 +170,8 @@ if __name__ == '__main__':
     # Save best model
     best_check = pl.callbacks.ModelCheckpoint(
         dirpath=check_dir,
-        filename="best-model-{epoch:02d}-{train_loss:.4f}",
-        monitor="train_loss",  # Metric used to decide best model
+        filename="best-model-{epoch:02d}-{val_loss:.4f}",
+        monitor="val_loss",  # Metric used to decide best model
         save_top_k=1,  # Keep only best checkpoint
         mode="min"
     )
@@ -161,7 +202,7 @@ if __name__ == '__main__':
         devices=1,
         callbacks=[best_check, last_check],
         logger=logger,
-        precision="16-mixed",  # Automatic mixed precision for faster training
+        check_val_every_n_epoch=15,
     )
 
-    trainer.fit(lit_model, ssl_train_loader, ckpt_path=resume_ckpt)
+    trainer.fit(lit_model, ssl_train_loader, ssl_val_loader, ckpt_path=resume_ckpt)
