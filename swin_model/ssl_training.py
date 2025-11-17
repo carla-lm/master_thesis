@@ -10,20 +10,20 @@ from utils import visualize_mask_overlay
 from monai.losses import SSIMLoss
 
 ssim_loss_fn = SSIMLoss(spatial_dims=3, reduction='mean')
-mse_loss_fn = torch.nn.MSELoss()
+l1_loss_fn = torch.nn.L1Loss()
 
 
-def reconstruction_loss(img, recon, mask, ssim_weight=0.1):
+def reconstruction_loss(img, recon, mask, ssim_weight=0.5):
     # Apply mask to only compare masked voxels for L1 loss
     mask = mask.to(dtype=img.dtype)
     img_masked = img * mask
     recon_masked = recon * mask
     # L1 loss on masked region only
-    loss_mse = mse_loss_fn(recon_masked, img_masked)
+    loss_l1 = l1_loss_fn(recon_masked, img_masked)
     # SSIM loss on entire image
     loss_ssim = ssim_loss_fn(img, recon + 1e-6)
-    total_loss = loss_mse + ssim_weight * loss_ssim
-    return total_loss, loss_mse, loss_ssim
+    total_loss = loss_l1 + ssim_weight * loss_ssim
+    return total_loss, loss_l1, loss_ssim
 
 
 class SSLLitSwinUNETR(pl.LightningModule):
@@ -93,10 +93,10 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=150)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--batch', type=int, default=1)
-    parser.add_argument('--embed_dim', type=int, default=48)
+    parser.add_argument('--embed_dim', type=int, default=96)
     parser.add_argument('--fold', type=int, default=1)
     parser.add_argument('--roi', type=int, nargs=3, default=[96, 96, 96])
-    parser.add_argument('--mask_ratio', type=float, default=0.3)
+    parser.add_argument('--mask_ratio', type=float, default=0.25)
     parser.add_argument('--experiment', type=int, default=1)
     parser.add_argument('--run', type=int, default=1)
     parser.add_argument('--data', type=str, default="numorph")

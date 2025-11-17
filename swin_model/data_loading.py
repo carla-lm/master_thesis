@@ -18,7 +18,8 @@ def get_transforms(dataset_type, roi):
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0), # Flip with 50% chance in 1st spatial dimension
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1), # Flip with 50% chance in 2nd spatial dimension
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2), # Flip with 50% chance in 3rd spatial dimension
-            T.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),  # norm_vox = (vox - mean)/std
+            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0,
+                                              b_max=1.0, clip=True, channel_wise=True),
             T.RandScaleIntensityd(keys="image", factors=0.1, prob=1.0),  # Simulate variations in contrast
             T.RandShiftIntensityd(keys="image", offsets=0.1, prob=1.0),  # Simulate variations in brightness
         ])
@@ -26,7 +27,8 @@ def get_transforms(dataset_type, roi):
         val_transforms = T.Compose([  # Only deterministic preprocessing, no random augmentations
             T.LoadImaged(keys=["image", "label"]),
             T.ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
-            T.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0,
+                                              b_max=1.0, clip=True, channel_wise=True),
         ])
 
     elif dataset_type == "numorph":
@@ -39,7 +41,8 @@ def get_transforms(dataset_type, roi):
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
-            T.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0,
+                                              b_max=1.0, clip=True, channel_wise=True),
             T.RandScaleIntensityd(keys="image", factors=0.1, prob=1.0),
             T.RandShiftIntensityd(keys="image", offsets=0.1, prob=1.0),
         ])
@@ -47,7 +50,8 @@ def get_transforms(dataset_type, roi):
         val_transforms = T.Compose([
             T.LoadImaged(keys=["image", "label"]),
             T.EnsureChannelFirstd(keys=["image", "label"]),
-            T.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0,
+                                              b_max=1.0, clip=True, channel_wise=True),
         ])
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")

@@ -13,11 +13,12 @@ from monai.metrics import DiceMetric, MeanIoU
 from monai.data import decollate_batch
 from monai.utils.enums import MetricReduction
 from swinunetr import SwinUNETR3D
-from data_loading import data_loader
+from ssl_data_loading import ssl_data_loader
 
 
 class LitSwinUNETR(pl.LightningModule):
-    def __init__(self, model=None, dataset="numorph", lr=1e-4, epochs=200, roi=(64,64,64), sw_batch_size=4, infer_overlap=0.5):
+    def __init__(self, model=None, dataset="numorph", lr=1e-4, epochs=200, roi=(96, 96, 96), sw_batch_size=4,
+                 infer_overlap=0.5):
         super().__init__()
         self.model = model
         self.lr = lr
@@ -103,11 +104,14 @@ if __name__ == '__main__':
     parser.add_argument('--batch', type=int, default=1)
     parser.add_argument('--embed_dim', type=int, default=48)
     parser.add_argument('--fold', type=int, default=1)
-    parser.add_argument('--roi', type=int, nargs=3, default=[128, 128, 64])
+    parser.add_argument('--roi', type=int, nargs=3, default=[96, 96, 96])
     parser.add_argument('--val_every', type=int, default=10)
-    parser.add_argument('--experiment', type=int, default=1)
-    parser.add_argument('--data', type=str, required=True)
-    parser.add_argument("--resume_dir", type=str, default=None)
+    parser.add_argument('--experiment', type=int, default=2)
+    parser.add_argument('--data', type=str, default="brats")
+    parser.add_argument('--resume_dir', type=str, default=None)
+    parser.add_argument('--pretrain_ckpt', type=str, default=r"D:\Master_Thesis\master_thesis\swin_model"
+                                                             r"\checkpoints_ssl\Brats\MSE_SSIM_E1v2_Latest\best-model"
+                                                             r"-epoch=89-val_loss=0.0408.ckpt")
     args = parser.parse_args()
 
     # Define hyperparameters
@@ -119,7 +123,7 @@ if __name__ == '__main__':
     feature_size = args.embed_dim
     val_every = args.val_every
     num_heads = [3, 6, 12, 24]
-    window_size = (7, 7, 7)
+    window_size = (6, 6, 6)
     patch_size = (2, 2, 2)
     embed_dims = [args.embed_dim * (2 ** i) for i in range(5)]
     sw_batch_size = 4
@@ -131,14 +135,19 @@ if __name__ == '__main__':
         out_channels = 3
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_brats")  # Path is current directory + data_brats
         split_file = os.path.join(data_dir, "data_split.json")  # Json path is data directory + json filename
-        train_loader, val_loader = data_loader(dataset_type=args.data, batch_size=batch_size, data_dir=data_dir,
-                                               split_file=split_file, fold=fold, roi=roi)
+        _, _, train_loader, val_loader = ssl_data_loader(dataset_type=args.data,
+                                                         batch_size=batch_size,
+                                                         data_dir=data_dir,
+                                                         split_file=split_file, fold=fold,
+                                                         roi=roi)
     elif args.data == "numorph":
         in_channels = 1
         out_channels = 1
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_numorph")
-        train_loader, val_loader = data_loader(dataset_type=args.data, batch_size=batch_size, data_dir=data_dir,
-                                               roi=roi)
+        _, _, train_loader, val_loader = ssl_data_loader(dataset_type=args.data,
+                                                         batch_size=batch_size,
+                                                         data_dir=data_dir,
+                                                         roi=roi)
     elif args.data == "selma":
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_selma")
 
@@ -155,6 +164,13 @@ if __name__ == '__main__':
         window_size=window_size,
         num_classes=out_channels
     )
+    # Load pretraining encoder weights and discard decoder weights
+    ssl_ckpt = torch.load(args.pretrain_ckpt, map_location="cpu", weights_only=False)
+    ssl_weights = ssl_ckpt["state_dict"]
+    filtered_weights = {k.replace("model.", ""): v for k, v in ssl_weights.items() if "decoder" not in k}
+    missing, unexpected = model.load_state_dict(filtered_weights, strict=False)
+    print("Loaded SSL weights. Missing keys:", len(missing))
+    print("Ignored keys (decoder etc.):", len(unexpected))
 
     # Set up lightning modules
     lit_model = LitSwinUNETR(model, args.data, lr, epochs, roi, sw_batch_size, infer_overlap)

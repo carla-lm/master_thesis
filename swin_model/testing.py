@@ -50,10 +50,10 @@ if __name__ == '__main__':
     torch.set_float32_matmul_precision('high')  # Trade off precision for performance
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", type=str, required=True)
+    parser.add_argument("--data", type=str, default="brats")
     parser.add_argument("--roi", type=int, nargs=3, default=[128, 128, 64])
     parser.add_argument('--fold', type=int, default=1)
-    parser.add_argument("--ckpt_path", type=str, required=True)
+    # parser.add_argument("--ckpt_path", type=str, required=True)
     parser.add_argument("--num_samples", type=int, default=3)
     parser.add_argument("--monai", dest="monai", action="store_true")
     parser.set_defaults(monai=False)
@@ -63,7 +63,9 @@ if __name__ == '__main__':
     roi = tuple(args.roi)
 
     # Load the trained model from checkpoint
-    model = LitSwinUNETR.load_from_checkpoint(args.ckpt_path)
+    # model = LitSwinUNETR.load_from_checkpoint(args.ckpt_path)
+    model = LitSwinUNETR.load_from_checkpoint(r"D:\Master_Thesis\master_thesis\swin_model\checkpoints\Finetune_Brats"
+                                              r"\version_0\best-model-epoch=89-val_dice_avg=0.8481.ckpt")
     model.eval()
     model.to(device)
     model_inferer = partial(sliding_window_inference, roi_size=roi, sw_batch_size=1,

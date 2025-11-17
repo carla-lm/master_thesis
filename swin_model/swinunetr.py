@@ -404,12 +404,12 @@ class SwinUNETR3D(nn.Module):
         self.seg_head = SegmentationHead(in_channels=embed_dims[0], num_classes=num_classes)
 
     def forward(self, x):
-        print("Raw Input Shape:", x.shape)
+        # print("Raw Input Shape:", x.shape)
         x = x.permute(0, 3, 4, 2, 1).contiguous()  # Input has shape (B, C, D, H, W), make it (B, H, W, D, C)
-        print("Encoder-ready Input Shape:", x.shape)
+        # print("Encoder-ready Input Shape:", x.shape)
         # Encoding Stage (Linear Embedding + Swin Transformers + Merging Layers)
         encoder_output, skips = self.encoder(x)
-        print("Encoder Output Shape:", encoder_output.shape)
+        # print("Encoder Output Shape:", encoder_output.shape)
         # for i, skip in enumerate(skips):
         # print(f"Skip {i + 1} shape: {skip.shape}")
 
@@ -427,7 +427,7 @@ class SwinUNETR3D(nn.Module):
 
         # Obtain Final Segmented Output
         final_output = self.seg_head(decoder_output)
-        print("Final Output Shape:", final_output.shape)
+        # print("Final Output Shape:", final_output.shape)
 
         return final_output
 

@@ -32,7 +32,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default="brats")
-    parser.add_argument("--roi", type=int, nargs=3, default=[128, 128, 128])
+    parser.add_argument("--roi", type=int, nargs=3, default=[96, 96, 96])
     parser.add_argument('--fold', type=int, default=1)
     parser.add_argument("--ckpt_path", type=str)
     parser.add_argument("--num_samples", type=int, default=1)
@@ -41,8 +41,8 @@ if __name__ == '__main__':
     fold = args.fold
     roi = tuple(args.roi)
     patch_size = (2, 2, 2)
-    ckpt_path = (r"D:\Master_Thesis\master_thesis\swin_model\checkpoints_ssl\Brats "
-                 r"Mine\E1v6_mask_-1\best-model-epoch=144-train_loss=0.0020.ckpt")
+    ckpt_path = (r"D:\Master_Thesis\master_thesis\swin_model\checkpoints_ssl\Brats\L1_SSIM_E1v3_Latest\best-model"
+                 r"-epoch=74-val_loss=0.1974.ckpt")
 
     if args.data == "brats":
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_brats")
@@ -76,7 +76,7 @@ if __name__ == '__main__':
             batch = test_loader.dataset[sample_idx]
             x = batch[0]["image"].unsqueeze(0).to(device)  # Add batch dimension (B, C, D, H, W)
             print(x.shape)
-            x_pad, pads = pad_to_window(x, window_size=(8, 8, 8))
+            x_pad, pads = pad_to_window(x, window_size=(6, 6, 6))
             recon, mask = model(x_pad)
             recon = unpad(recon, pads)
             mask = unpad(mask, pads)

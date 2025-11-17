@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 from swinunetr import SwinUNETREncoder3D
-from monai.networks.nets.swin_unetr import SwinTransformer as SwinViT
 
 
 def mask_3d(img, window_size, input_size, mask_ratio):
