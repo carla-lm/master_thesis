@@ -5,7 +5,7 @@ import pandas as pd
 matplotlib.use("TkAgg")
 
 # Load file with training data
-log_dir = os.path.join(os.getcwd(), "checkpoints", "Finetune_Brats", "version_0")
+log_dir = os.path.join(os.getcwd(), "checkpoints", "Custom_Swin_Lit_Selma", "version_1")
 metrics_file = os.path.join(log_dir, "metrics.csv")
 df = pd.read_csv(metrics_file)
 check = "supervised"

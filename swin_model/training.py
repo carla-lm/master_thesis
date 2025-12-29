@@ -17,7 +17,8 @@ from data_loading import data_loader
 
 
 class LitSwinUNETR(pl.LightningModule):
-    def __init__(self, model=None, dataset="numorph", lr=1e-4, epochs=200, roi=(64,64,64), sw_batch_size=4, infer_overlap=0.5):
+    def __init__(self, model=None, dataset="numorph", lr=1e-4, epochs=200, roi=(64, 64, 64), sw_batch_size=4,
+                 infer_overlap=0.5):
         super().__init__()
         self.model = model
         self.lr = lr
@@ -26,7 +27,7 @@ class LitSwinUNETR(pl.LightningModule):
         if dataset == "brats":
             self.loss_func = DiceLoss(to_onehot_y=False, sigmoid=True)
 
-        elif dataset == "numorph":
+        elif dataset in ["numorph", "selma"]:
             self.loss_func = DiceCELoss(sigmoid=True, squared_pred=True, lambda_dice=0.5, lambda_ce=0.5)
 
         self.post_sigmoid = Activations(sigmoid=True)
@@ -79,7 +80,7 @@ class LitSwinUNETR(pl.LightningModule):
             self.log("val_dice_et", dice_et)
             self.log("val_dice_avg", mean_dice)
 
-        elif self.dataset == "numorph":
+        elif self.dataset in ["numorph", "selma"]:
             self.log("val_dice_avg", mean_dice)
 
         self.log("val_jaccard_avg", mean_jaccard)
@@ -101,9 +102,9 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--batch', type=int, default=1)
-    parser.add_argument('--embed_dim', type=int, default=48)
+    parser.add_argument('--embed_dim', type=int, default=96)
     parser.add_argument('--fold', type=int, default=1)
-    parser.add_argument('--roi', type=int, nargs=3, default=[128, 128, 64])
+    parser.add_argument('--roi', type=int, nargs=3, default=[120, 120, 96])
     parser.add_argument('--val_every', type=int, default=10)
     parser.add_argument('--experiment', type=int, default=1)
     parser.add_argument('--data', type=str, required=True)
@@ -119,7 +120,7 @@ if __name__ == '__main__':
     feature_size = args.embed_dim
     val_every = args.val_every
     num_heads = [3, 6, 12, 24]
-    window_size = (7, 7, 7)
+    window_size = (6, 6, 6)
     patch_size = (2, 2, 2)
     embed_dims = [args.embed_dim * (2 ** i) for i in range(5)]
     sw_batch_size = 4
@@ -140,7 +141,13 @@ if __name__ == '__main__':
         train_loader, val_loader = data_loader(dataset_type=args.data, batch_size=batch_size, data_dir=data_dir,
                                                roi=roi)
     elif args.data == "selma":
+        in_channels = 1
+        out_channels = 1
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_selma")
+        train_loader, val_loader = data_loader(dataset_type=args.data,
+                                               batch_size=batch_size,
+                                               data_dir=data_dir,
+                                               roi=roi)
 
     else:
         raise ValueError("Unknown dataset")

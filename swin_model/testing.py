@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 from training import LitSwinUNETR
-from data_loading import eval_data_loader
+from ssl_data_loading import ssl_data_loader
 from monai.inferers import sliding_window_inference
 from functools import partial
 
@@ -24,6 +24,10 @@ def visualize_prediction(dataset, image, ground_truth, prediction, idx):
         lbl_slice = ground_truth[:, :, mid_slice]
         pred_slice = prediction[:, :, mid_slice]
     elif dataset == "numorph":
+        img_slice = image[:, :, mid_slice]
+        lbl_slice = ground_truth[:, :, mid_slice]
+        pred_slice = prediction[:, :, mid_slice]
+    elif dataset == "selma":
         img_slice = image[:, :, mid_slice]
         lbl_slice = ground_truth[:, :, mid_slice]
         pred_slice = prediction[:, :, mid_slice]
@@ -50,8 +54,8 @@ if __name__ == '__main__':
     torch.set_float32_matmul_precision('high')  # Trade off precision for performance
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", type=str, default="brats")
-    parser.add_argument("--roi", type=int, nargs=3, default=[128, 128, 64])
+    parser.add_argument("--data", type=str, default="selma")
+    parser.add_argument("--roi", type=int, nargs=3, default=[120, 120, 96])
     parser.add_argument('--fold', type=int, default=1)
     # parser.add_argument("--ckpt_path", type=str, required=True)
     parser.add_argument("--num_samples", type=int, default=3)
@@ -64,8 +68,9 @@ if __name__ == '__main__':
 
     # Load the trained model from checkpoint
     # model = LitSwinUNETR.load_from_checkpoint(args.ckpt_path)
-    model = LitSwinUNETR.load_from_checkpoint(r"D:\Master_Thesis\master_thesis\swin_model\checkpoints\Finetune_Brats"
-                                              r"\version_0\best-model-epoch=89-val_dice_avg=0.8481.ckpt")
+    model = LitSwinUNETR.load_from_checkpoint(r"D:\Master_Thesis\master_thesis\swin_model\checkpoints"
+                                              r"\Custom_Swin_Lit_Selma\version_2\best-model-epoch=99-val_dice_avg=0"
+                                              r".5837.ckpt")
     model.eval()
     model.to(device)
     model_inferer = partial(sliding_window_inference, roi_size=roi, sw_batch_size=1,
@@ -74,12 +79,17 @@ if __name__ == '__main__':
     if args.data == "brats":
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_brats")
         split_file = os.path.join(data_dir, "data_split.json")
-        test_loader = eval_data_loader(dataset_type=args.data, roi=roi, data_dir=data_dir, split_file=split_file,
-                                       fold=fold)  # Load the test data (same as validation data)
+        _, _, _, test_loader = ssl_data_loader(dataset_type=args.data, batch_size=1, roi=roi, data_dir=data_dir,
+                                               split_file=split_file,
+                                               fold=fold)  # Load the supervised test data (same as validation data)
 
     elif args.data == "numorph":
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_numorph")
-        test_loader = eval_data_loader(dataset_type=args.data, roi=roi, data_dir=data_dir)
+        _, _, _, test_loader = ssl_data_loader(dataset_type=args.data, batch_size=1, roi=roi, data_dir=data_dir)
+
+    elif args.data == "selma":
+        data_dir = os.path.join(os.getcwd(), "TrainingData", "data_selma")
+        _, _, _, test_loader = ssl_data_loader(dataset_type=args.data, batch_size=1, roi=roi, data_dir=data_dir)
 
     else:
         raise ValueError("Unknown dataset")
@@ -113,7 +123,7 @@ if __name__ == '__main__':
                 label_mask[label[0] == 1] = 1
                 label_mask[label[2] == 1] = 4
 
-            elif args.data == "numorph":
+            elif args.data in ["numorph", "selma"]:
                 prediction = torch.sigmoid(prediction)  # convert logits to [0, 1]
                 prediction = (prediction > 0.5).float()  # threshold to binary mask
                 prediction = prediction.squeeze(0).squeeze(0)  # remove channel and batch dim

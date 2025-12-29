@@ -109,7 +109,7 @@ class SSLSwinUNETR3D(nn.Module):
 if __name__ == "__main__":
     import os
     import nibabel as nib
-    from utils import visualize_mask_overlay, compute_intensity_range
+    from utils import visualize_mask_overlay
 
     # Load an example image
     data_dir = os.path.join(os.getcwd(), "TrainingData", "data_brats")  # Path is current directory + data_brats

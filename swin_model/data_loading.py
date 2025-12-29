@@ -10,16 +10,20 @@ def get_transforms(dataset_type, roi):
         train_transforms = T.Compose([  # create a sequential pipeline of preprocessing steps and augmentations
             T.LoadImaged(keys=["image", "label"]),  # Load label and image entries of the sample
             T.ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),  # Convert label map to multi-channel format
+            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.1, upper=99.9, b_min=0.0,
+                                              b_max=1.0, clip=True, channel_wise=True),
             T.CropForegroundd(keys=["image", "label"], source_key="image",  # Crop out empty background
                               k_divisible=[roi[0], roi[1], roi[2]], allow_smaller=True), # Ensure crop is divisible by roi
-            # T.SpatialPadd(keys=["image", "label"], spatial_size=roi, mode="constant"),  # If crop is smaller, pad to roi
+            # T.SpatialPadd(keys=["image", "label"], spatial_size=[roi[0], roi[1], roi[2]]), # If crop is smaller, pad to roi
             T.RandSpatialCropd(keys=["image", "label"],  # Randomly crop a patch of size roi in image and label
-                               roi_size=[roi[0], roi[1], roi[2]], random_size=False), # Always return the given roi size
-            T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0), # Flip with 50% chance in 1st spatial dimension
-            T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1), # Flip with 50% chance in 2nd spatial dimension
-            T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2), # Flip with 50% chance in 3rd spatial dimension
-            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0,
-                                              b_max=1.0, clip=True, channel_wise=True),
+                               roi_size=[roi[0], roi[1], roi[2]], random_size=False),
+            # Always return the given roi size
+            T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
+            # Flip with 50% chance in 1st spatial dimension
+            T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
+            # Flip with 50% chance in 2nd spatial dimension
+            T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
+            # Flip with 50% chance in 3rd spatial dimension
             T.RandScaleIntensityd(keys="image", factors=0.1, prob=1.0),  # Simulate variations in contrast
             T.RandShiftIntensityd(keys="image", offsets=0.1, prob=1.0),  # Simulate variations in brightness
         ])
@@ -27,22 +31,24 @@ def get_transforms(dataset_type, roi):
         val_transforms = T.Compose([  # Only deterministic preprocessing, no random augmentations
             T.LoadImaged(keys=["image", "label"]),
             T.ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
-            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0,
+            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.1, upper=99.9, b_min=0.0,
                                               b_max=1.0, clip=True, channel_wise=True),
         ])
 
-    elif dataset_type == "numorph":
+    elif dataset_type in ["numorph", "selma"]:
         train_transforms = T.Compose([
             T.LoadImaged(keys=["image", "label"]),
             T.EnsureChannelFirstd(keys=["image", "label"]),  # This adds the single channel as a fourth dimension
+            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.1, upper=99.9, b_min=0.0,
+                                              b_max=1.0, clip=True, channel_wise=True),
             T.CropForegroundd(keys=["image", "label"], source_key="image",
                               k_divisible=[roi[0], roi[1], roi[2]], allow_smaller=True),
+            # T.SpatialPadd(keys=["image", "label"], spatial_size=[roi[0], roi[1], roi[2]]),
             T.RandSpatialCropd(keys=["image", "label"], roi_size=[roi[0], roi[1], roi[2]], random_size=False),
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
-            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0,
-                                              b_max=1.0, clip=True, channel_wise=True),
+
             T.RandScaleIntensityd(keys="image", factors=0.1, prob=1.0),
             T.RandShiftIntensityd(keys="image", offsets=0.1, prob=1.0),
         ])
@@ -50,9 +56,10 @@ def get_transforms(dataset_type, roi):
         val_transforms = T.Compose([
             T.LoadImaged(keys=["image", "label"]),
             T.EnsureChannelFirstd(keys=["image", "label"]),
-            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0,
+            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.1, upper=99.9, b_min=0.0,
                                               b_max=1.0, clip=True, channel_wise=True),
         ])
+
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")
 
@@ -100,6 +107,47 @@ def data_split_numorph(data_dir, test_size, seed):
     return train, val
 
 
+def data_split_selma(data_dir, test_size, seed):
+    entity_dirs = ["Alzheimer", "Cells", "Nuclei", "Vessels"]
+    # entity_dirs = ["Vessels"]
+    files = []
+    annotated_dir = os.path.join(data_dir, "Annotated")
+    for entity in entity_dirs:
+        raw_dir = os.path.join(annotated_dir, entity, "raw_patches")
+        lbl_dir = os.path.join(annotated_dir, entity, "annotations")
+        raw_patches = sorted(glob.glob(os.path.join(raw_dir, "*.nii.gz")))
+        labels = sorted(glob.glob(os.path.join(lbl_dir, "*.nii.gz")))
+        # Match raw patches to their labels
+        raw_dict = {}
+        for rp in raw_patches:
+            base = os.path.basename(rp)  # patchvolume_XXX_0000.nii.gz or _0001.nii.gz
+            key = base.split("_")[-2]  # XXX
+            raw_dict.setdefault(key, []).append(rp)
+
+        for lbl in labels:
+            key = os.path.basename(lbl).split("_")[-1].split(".")[0]  # patchvolume_XXX.nii.gz get XXX
+            if key not in raw_dict:
+                continue
+
+            if entity == "Vessels":
+                rps = sorted(raw_dict[key])
+                c00 = [rp for rp in rps if rp.endswith("_0000.nii.gz")]  # Get only C00
+                if len(c00) == 1:
+                    files.append({
+                        "image": c00,
+                        "label": lbl
+                    })
+
+            else:  # Single-channel entities
+                for rp in raw_dict[key]:
+                    files.append({
+                        "image": [rp],
+                        "label": lbl
+                    })
+    train_files, val_files = train_test_split(files, test_size=test_size, random_state=seed)
+    return train_files, val_files
+
+
 def data_loader(dataset_type, batch_size, roi, data_dir, split_file=None, fold=None):
     if dataset_type == "brats":
         if split_file is None or fold is None:
@@ -108,6 +156,9 @@ def data_loader(dataset_type, batch_size, roi, data_dir, split_file=None, fold=N
 
     elif dataset_type == "numorph":
         train_files, val_files = data_split_numorph(data_dir, test_size=0.2, seed=42)
+
+    elif dataset_type == "selma":
+        train_files, val_files = data_split_selma(data_dir, test_size=0.2, seed=42)
 
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")
@@ -123,24 +174,3 @@ def data_loader(dataset_type, batch_size, roi, data_dir, split_file=None, fold=N
                                  num_workers=8, pin_memory=True, persistent_workers=True)
 
     return train_loader, val_loader
-
-
-def eval_data_loader(dataset_type, roi, data_dir, split_file=None, fold=None):
-    # Load the validation files as test data
-    if dataset_type == "brats":
-        if split_file is None or fold is None:
-            raise ValueError("For the BraTS dataset you must provide a split file and a fold")
-        _, test_files = data_split_brats(data_dir, split_file, fold)
-    elif dataset_type == "numorph":
-        _, test_files = data_split_numorph(data_dir, test_size=0.2, seed=42)
-    else:
-        raise ValueError(f"Unknown dataset type: {dataset_type}")
-
-    # Use only deterministic transforms (same as val_transforms)
-    _, test_trans = get_transforms(dataset_type, roi)
-
-    test_dataset = data.Dataset(data=test_files, transform=test_trans)
-    test_loader = data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=8, pin_memory=True)
-
-    print(f"Loaded {len(test_files)} test samples")
-    return test_loader

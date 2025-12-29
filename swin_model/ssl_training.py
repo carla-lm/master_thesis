@@ -11,15 +11,17 @@ from monai.losses import SSIMLoss
 
 ssim_loss_fn = SSIMLoss(spatial_dims=3, reduction='mean')
 l1_loss_fn = torch.nn.L1Loss()
+mse_loss_fn = torch.nn.MSELoss()
 
 
-def reconstruction_loss(img, recon, mask, ssim_weight=0.5):
+def reconstruction_loss(img, recon, mask, ssim_weight=0.1):
     # Apply mask to only compare masked voxels for L1 loss
     mask = mask.to(dtype=img.dtype)
     img_masked = img * mask
     recon_masked = recon * mask
-    # L1 loss on masked region only
+    # L1 or MSE loss on masked region only
     loss_l1 = l1_loss_fn(recon_masked, img_masked)
+    # loss_mse = mse_loss_fn(recon_masked, img_masked)
     # SSIM loss on entire image
     loss_ssim = ssim_loss_fn(img, recon + 1e-6)
     total_loss = loss_l1 + ssim_weight * loss_ssim
@@ -29,6 +31,7 @@ def reconstruction_loss(img, recon, mask, ssim_weight=0.5):
 class SSLLitSwinUNETR(pl.LightningModule):
     def __init__(self, in_channels, patch_size, window_size, embed_dims, num_heads, lr, epochs, mask_ratio):
         super().__init__()
+        self.example_val_batch = None
         self.save_hyperparameters()
         self.lr = lr
         self.epochs = epochs
@@ -52,7 +55,7 @@ class SSLLitSwinUNETR(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x = batch["image"].to(self.device)
-        recon, mask = self.forward(x)
+        recon, mask = self(x)
         # Compute loss voxel-wise
         loss, loss_l1, loss_ssim = reconstruction_loss(x, recon, mask)
         self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
@@ -62,7 +65,10 @@ class SSLLitSwinUNETR(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         x = batch["image"].to(self.device)
-        recon, mask = self.forward(x)
+        if batch_idx == 0:
+            self.example_val_batch = batch
+            
+        recon, mask = self(x)
         val_loss, val_l1, val_ssim = reconstruction_loss(x, recon, mask)
         self.log("val_loss", val_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log("val_l1", val_l1, on_step=False, on_epoch=True)
@@ -70,10 +76,10 @@ class SSLLitSwinUNETR(pl.LightningModule):
         return val_loss
 
     def on_validation_epoch_end(self):  # Only test one sample per val epoch instead of all val batch samples
-        batch = next(iter(self.val_loader))
+        batch = self.example_val_batch
         x = batch["image"][0].to(self.device)  # [0] to take the first sample in the batch
         x = x.unsqueeze(0)  # Add batch dimension as previous line removes it
-        recon, mask = self.forward(x)
+        recon, mask = self(x)
         visualize_mask_overlay(x, mask, recon, filename=f"epoch_{self.current_epoch:03d}", run_name=lit_model.run_name)
 
     def configure_optimizers(self):
@@ -90,16 +96,16 @@ if __name__ == '__main__':
 
     # Set parameters that can be passed by the user
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=150)
+    parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--batch', type=int, default=1)
     parser.add_argument('--embed_dim', type=int, default=96)
     parser.add_argument('--fold', type=int, default=1)
-    parser.add_argument('--roi', type=int, nargs=3, default=[96, 96, 96])
-    parser.add_argument('--mask_ratio', type=float, default=0.25)
+    parser.add_argument('--roi', type=int, nargs=3, default=[120, 120, 96])
+    parser.add_argument('--mask_ratio', type=float, default=0.5)
     parser.add_argument('--experiment', type=int, default=1)
     parser.add_argument('--run', type=int, default=1)
-    parser.add_argument('--data', type=str, default="numorph")
+    parser.add_argument('--data', type=str, default="brats")
     parser.add_argument("--resume_dir", type=str, default=None)
     args = parser.parse_args()
 
@@ -135,7 +141,13 @@ if __name__ == '__main__':
                                                                                      data_dir=data_dir,
                                                                                      roi=roi)
     elif args.data == "selma":
+        in_channels = 1
+        out_channels = in_channels  # In SSL I am reconstructing the original image, not predicting classes
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_selma")
+        ssl_train_loader, ssl_val_loader, train_loader, val_loader = ssl_data_loader(dataset_type=args.data,
+                                                                                     batch_size=batch_size,
+                                                                                     data_dir=data_dir,
+                                                                                     roi=roi)
 
     else:
         raise ValueError("Unknown dataset")

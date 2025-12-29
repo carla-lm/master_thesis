@@ -27,7 +27,7 @@ class LitSwinUNETR(pl.LightningModule):
         if dataset == "brats":
             self.loss_func = DiceLoss(to_onehot_y=False, sigmoid=True)
 
-        elif dataset == "numorph":
+        elif dataset in ["numorph", "selma"]:
             self.loss_func = DiceCELoss(sigmoid=True, squared_pred=True, lambda_dice=0.5, lambda_ce=0.5)
 
         self.post_sigmoid = Activations(sigmoid=True)
@@ -45,7 +45,15 @@ class LitSwinUNETR(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         data, target = batch["image"], batch["label"]
+        if batch_idx == 0:
+            print("Label min/max:", target.min().item(), target.max().item())
+            print("Label unique:", torch.unique(target))
+            print("Image min/max:", data.min().item(), data.max().item())
+
         logits = self(data)
+        if batch_idx == 0:
+            print("Logits min/max:", logits.min().item(), logits.max().item())
+
         loss = self.loss_func(logits, target)
         self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         return loss
@@ -80,7 +88,7 @@ class LitSwinUNETR(pl.LightningModule):
             self.log("val_dice_et", dice_et)
             self.log("val_dice_avg", mean_dice)
 
-        elif self.dataset == "numorph":
+        elif self.dataset in ["numorph", "selma"]:
             self.log("val_dice_avg", mean_dice)
 
         self.log("val_jaccard_avg", mean_jaccard)
@@ -99,19 +107,19 @@ if __name__ == '__main__':
 
     # Set parameters that can be passed by the user
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--batch', type=int, default=1)
-    parser.add_argument('--embed_dim', type=int, default=48)
+    parser.add_argument('--embed_dim', type=int, default=96)
     parser.add_argument('--fold', type=int, default=1)
-    parser.add_argument('--roi', type=int, nargs=3, default=[96, 96, 96])
+    parser.add_argument('--roi', type=int, nargs=3, default=[120, 120, 96])
     parser.add_argument('--val_every', type=int, default=10)
-    parser.add_argument('--experiment', type=int, default=2)
-    parser.add_argument('--data', type=str, default="brats")
+    parser.add_argument('--experiment', type=int, default=10)
+    parser.add_argument('--data', type=str, default="selma")
     parser.add_argument('--resume_dir', type=str, default=None)
     parser.add_argument('--pretrain_ckpt', type=str, default=r"D:\Master_Thesis\master_thesis\swin_model"
-                                                             r"\checkpoints_ssl\Brats\MSE_SSIM_E1v2_Latest\best-model"
-                                                             r"-epoch=89-val_loss=0.0408.ckpt")
+                                                             r"\checkpoints_ssl\Selma\version_2\best-model-epoch=89"
+                                                             r"-val_loss=0.0409.ckpt")
     args = parser.parse_args()
 
     # Define hyperparameters
@@ -149,7 +157,13 @@ if __name__ == '__main__':
                                                          data_dir=data_dir,
                                                          roi=roi)
     elif args.data == "selma":
+        in_channels = 1
+        out_channels = 1
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_selma")
+        _, _, train_loader, val_loader = ssl_data_loader(dataset_type=args.data,
+                                                         batch_size=batch_size,
+                                                         data_dir=data_dir,
+                                                         roi=roi)
 
     else:
         raise ValueError("Unknown dataset")
