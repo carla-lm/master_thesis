@@ -109,10 +109,10 @@ def data_split_numorph(data_dir, test_size, seed):
 
 def data_split_selma(data_dir, test_size, seed):
     entity_dirs = ["Alzheimer", "Cells", "Nuclei", "Vessels"]
-    # entity_dirs = ["Vessels"]
     files = []
+    entity_labels = []  # Track entity type for stratified splitting
     annotated_dir = os.path.join(data_dir, "Annotated")
-    for entity in entity_dirs:
+    for entity_idx, entity in enumerate(entity_dirs):
         raw_dir = os.path.join(annotated_dir, entity, "raw_patches")
         lbl_dir = os.path.join(annotated_dir, entity, "annotations")
         raw_patches = sorted(glob.glob(os.path.join(raw_dir, "*.nii.gz")))
@@ -128,7 +128,6 @@ def data_split_selma(data_dir, test_size, seed):
             key = os.path.basename(lbl).split("_")[-1].split(".")[0]  # patchvolume_XXX.nii.gz get XXX
             if key not in raw_dict:
                 continue
-
             if entity == "Vessels":
                 rps = sorted(raw_dict[key])
                 c00 = [rp for rp in rps if rp.endswith("_0000.nii.gz")]  # Get only C00
@@ -137,6 +136,7 @@ def data_split_selma(data_dir, test_size, seed):
                         "image": c00,
                         "label": lbl
                     })
+                    entity_labels.append(entity_idx)
 
             else:  # Single-channel entities
                 for rp in raw_dict[key]:
@@ -144,7 +144,10 @@ def data_split_selma(data_dir, test_size, seed):
                         "image": [rp],
                         "label": lbl
                     })
-    train_files, val_files = train_test_split(files, test_size=test_size, random_state=seed)
+                    entity_labels.append(entity_idx)
+
+    # Stratified split ensures proportional entity distribution in train/val
+    train_files, val_files = train_test_split(files, test_size=test_size, random_state=seed, stratify=entity_labels)
     return train_files, val_files
 
 

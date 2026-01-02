@@ -45,15 +45,7 @@ class LitSwinUNETR(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         data, target = batch["image"], batch["label"]
-        if batch_idx == 0:
-            print("Label min/max:", target.min().item(), target.max().item())
-            print("Label unique:", torch.unique(target))
-            print("Image min/max:", data.min().item(), data.max().item())
-
         logits = self(data)
-        if batch_idx == 0:
-            print("Logits min/max:", logits.min().item(), logits.max().item())
-
         loss = self.loss_func(logits, target)
         self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         return loss
@@ -178,6 +170,7 @@ if __name__ == '__main__':
         window_size=window_size,
         num_classes=out_channels
     )
+
     # Load pretraining encoder weights and discard decoder weights
     ssl_ckpt = torch.load(args.pretrain_ckpt, map_location="cpu", weights_only=False)
     ssl_weights = ssl_ckpt["state_dict"]
@@ -239,7 +232,8 @@ if __name__ == '__main__':
     trainer = pl.Trainer(
         max_epochs=epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=1,
+        devices="auto",
+        strategy="auto",
         callbacks=[best_check, last_check],
         logger=logger,
         check_val_every_n_epoch=val_every,

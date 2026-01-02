@@ -6,6 +6,10 @@ from sklearn.model_selection import train_test_split
 from data_loading import get_transforms
 
 
+def extract_first_channel(x):  # Get only C00 channel from vessels
+    return x[0:1] if x.shape[0] > 1 else x
+
+
 def get_ssl_transforms(dataset_type, roi):  # No geometric transforms for MAE SSL
     if dataset_type in ["numorph", "brats"]:
         transforms = T.Compose([T.LoadImaged(keys=["image"]),
@@ -22,12 +26,9 @@ def get_ssl_transforms(dataset_type, roi):  # No geometric transforms for MAE SS
     elif dataset_type == "selma":
         transforms = T.Compose([T.LoadImaged(keys=["image"]),
                                 T.EnsureChannelFirstd(keys=["image"]),
-                                #T.Lambdad(  # Duplicate single-channel data
-                                #    keys=["image"],
-                                #    func=lambda x: x.repeat(2, 1, 1, 1) if x.shape[0] == 1 else x),
                                 T.Lambdad(
                                     keys=["image"],
-                                    func=lambda x: x[0:1] if x.shape[0] > 1 else x
+                                    func=extract_first_channel
                                 ),
                                 T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.1, upper=99.9, b_min=0.0,
                                                                   b_max=1.0, clip=True, channel_wise=True),
@@ -98,22 +99,27 @@ def data_split_numorph_ssl(data_dir, seed=42):
 
 def data_split_selma_ssl(data_dir, seed=42):
     entity_dirs = ["Alzheimer", "Cells", "Nuclei", "Vessels"]
-    # entity_dirs = ["Vessels"]
-    # Unannotated Data
+    # Unannotated Data (for SSL pretraining)
     ssl_imgs = []
+    ssl_entity_labels = []  # Track entity type for stratified splitting
     unannotated_dir = os.path.join(data_dir, "Unannotated")
-    for entity in entity_dirs:
+    for entity_idx, entity in enumerate(entity_dirs):
         all_patches_dir = os.path.join(unannotated_dir, entity, "all_patches")
         nii_files = sorted(glob.glob(os.path.join(all_patches_dir, "*.nii.gz")))
         for f in nii_files:
             ssl_imgs.append({"image": [f]})
+            ssl_entity_labels.append(entity_idx)
 
-    ssl_train_files, ssl_val_files = train_test_split(ssl_imgs, test_size=0.1, random_state=seed)
+    # Stratified split ensures proportional entity distribution in SSL train/val
+    ssl_train_files, ssl_val_files = train_test_split(
+        ssl_imgs, test_size=0.1, random_state=seed, stratify=ssl_entity_labels
+    )
 
     # Annotated Data
     finetune_files = []
+    finetune_entity_labels = []
     annotated_dir = os.path.join(data_dir, "Annotated")
-    for entity in entity_dirs:
+    for entity_idx, entity in enumerate(entity_dirs):
         raw_dir = os.path.join(annotated_dir, entity, "raw_patches")
         lbl_dir = os.path.join(annotated_dir, entity, "annotations")
         raw_patches = sorted(glob.glob(os.path.join(raw_dir, "*.nii.gz")))
@@ -138,14 +144,19 @@ def data_split_selma_ssl(data_dir, seed=42):
                         "image": c00,
                         "label": lbl
                     })
+                    finetune_entity_labels.append(entity_idx)
             else:  # Single-channel entities
                 for rp in raw_dict[key]:
                     finetune_files.append({
                         "image": [rp],
                         "label": lbl
                     })
+                    finetune_entity_labels.append(entity_idx)
 
-    train_files, val_files = train_test_split(finetune_files, test_size=0.2, random_state=seed)
+    # Stratified split ensures proportional entity distribution in finetune train/val
+    train_files, val_files = train_test_split(
+        finetune_files, test_size=0.2, random_state=seed, stratify=finetune_entity_labels
+    )
     return ssl_train_files, ssl_val_files, train_files, val_files
 
 

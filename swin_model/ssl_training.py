@@ -80,7 +80,7 @@ class SSLLitSwinUNETR(pl.LightningModule):
         x = batch["image"][0].to(self.device)  # [0] to take the first sample in the batch
         x = x.unsqueeze(0)  # Add batch dimension as previous line removes it
         recon, mask = self(x)
-        visualize_mask_overlay(x, mask, recon, filename=f"epoch_{self.current_epoch:03d}", run_name=lit_model.run_name)
+        visualize_mask_overlay(x, mask, recon, filename=f"epoch_{self.current_epoch:03d}", run_name=self.run_name)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=1e-5)
@@ -211,10 +211,12 @@ if __name__ == '__main__':
     trainer = pl.Trainer(
         max_epochs=epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=1,
+        devices="auto",
+        strategy="auto",
         callbacks=[best_check, last_check],
         logger=logger,
         check_val_every_n_epoch=15,
+        precision="16-mixed",
     )
 
     trainer.fit(lit_model, ssl_train_loader, ssl_val_loader, ckpt_path=resume_ckpt)

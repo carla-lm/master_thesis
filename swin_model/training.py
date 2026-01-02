@@ -216,7 +216,8 @@ if __name__ == '__main__':
     trainer = pl.Trainer(
         max_epochs=epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=1,
+        devices="auto",
+        strategy="auto",
         callbacks=[best_check, last_check],
         logger=logger,
         check_val_every_n_epoch=val_every,
