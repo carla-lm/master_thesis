@@ -2,9 +2,10 @@
 import os
 import argparse
 import torch
+import torch.nn.functional as F
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import CSVLogger
-from swinunetr_ssl import SSLSwinUNETR3D
+from swinunetr_ssl import MAESwinUNETR3D, BYOLSwinUNETR3D
 from ssl_data_loading import ssl_data_loader
 from utils import visualize_mask_overlay
 from monai.losses import SSIMLoss
@@ -28,8 +29,22 @@ def reconstruction_loss(img, recon, mask, ssim_weight=0.1):
     return total_loss, loss_l1, loss_ssim
 
 
+def byol_loss(pred1, pred2, target1, target2):
+    # Normalize target and prediction vectors
+    pred1_norm = F.normalize(pred1, dim=-1, p=2)
+    pred2_norm = F.normalize(pred2, dim=-1, p=2)
+    target1_norm = F.normalize(target1, dim=-1, p=2)
+    target2_norm = F.normalize(target2, dim=-1, p=2)
+    # Symmetric: predict view2 from view1 and vice versa
+    loss1 = 2 - 2 * (pred1_norm * target2_norm).sum(dim=-1)
+    loss2 = 2 - 2 * (pred2_norm * target1_norm).sum(dim=-1)
+    total_loss = loss1 + loss2
+    return total_loss.mean()  # Average loss across batches
+
+
 class SSLLitSwinUNETR(pl.LightningModule):
-    def __init__(self, in_channels, patch_size, window_size, embed_dims, num_heads, lr, epochs, mask_ratio):
+    def __init__(self, in_channels, patch_size, window_size, embed_dims, num_heads, lr, epochs,
+                 mask_ratio, ssl_mode):
         super().__init__()
         self.example_val_batch = None
         self.save_hyperparameters()
@@ -41,46 +56,79 @@ class SSLLitSwinUNETR(pl.LightningModule):
         self.patch_size = patch_size
         self.window_size = window_size
         self.mask_ratio = mask_ratio
-        self.model = SSLSwinUNETR3D(in_channels=self.in_channels, patch_size=self.patch_size,
-                                    embed_dims=self.embed_dims, num_heads=self.num_heads,
-                                    window_size=self.window_size, mask_ratio=self.mask_ratio)
+        self.ssl_mode = ssl_mode
 
-    def forward(self, x):
-        # Prepare and embed the input
-        # print("Raw Input Shape:", x.shape)
-        recon, mask = self.model(x)
-        # print("Decoder Output Shape:", recon.shape)
-        # print("Mask Shape:", mask.shape)
-        return recon, mask
+        # Initialize the model based on the SSL mode
+        if ssl_mode == "mae":
+            self.model = MAESwinUNETR3D(in_channels=in_channels, patch_size=patch_size,
+                                        embed_dims=embed_dims, num_heads=num_heads,
+                                        window_size=window_size, mask_ratio=mask_ratio)
+        elif ssl_mode == "byol":
+            self.model = BYOLSwinUNETR3D(in_channels=in_channels, patch_size=patch_size,
+                                         embed_dims=embed_dims, num_heads=num_heads,
+                                         window_size=window_size)
+
+        else:
+            raise ValueError(f"Unknown ssl_mode: {ssl_mode}")
+
+    def forward(self, x, view1=None, view2=None):
+        if self.ssl_mode == "mae":
+            return self.model(x)
+        elif self.ssl_mode == "byol":
+            return self.model(view1, view2)
 
     def training_step(self, batch, batch_idx):
-        x = batch["image"].to(self.device)
-        recon, mask = self(x)
-        # Compute loss voxel-wise
-        loss, loss_l1, loss_ssim = reconstruction_loss(x, recon, mask)
-        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("train_l1", loss_l1, on_step=False, on_epoch=True)
-        self.log("train_ssim", loss_ssim, on_step=False, on_epoch=True)
-        return loss
+        if self.ssl_mode == "mae":
+            x = batch["image"].to(self.device)
+            recon, mask = self.model(x)
+            loss, loss_l1, loss_ssim = reconstruction_loss(x, recon, mask)
+            self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+            self.log("train_l1", loss_l1, on_step=False, on_epoch=True)
+            self.log("train_ssim", loss_ssim, on_step=False, on_epoch=True)
+            return loss
+
+        elif self.ssl_mode == "byol":
+            v1 = batch["view1"].to(self.device)
+            v2 = batch["view2"].to(self.device)
+            pred1, pred2, target1, target2 = self.model(v1, v2)
+            loss = byol_loss(pred1, pred2, target1, target2)
+            self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+            return loss
 
     def validation_step(self, batch, batch_idx):
-        x = batch["image"].to(self.device)
         if batch_idx == 0:
             self.example_val_batch = batch
-            
-        recon, mask = self(x)
-        val_loss, val_l1, val_ssim = reconstruction_loss(x, recon, mask)
-        self.log("val_loss", val_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val_l1", val_l1, on_step=False, on_epoch=True)
-        self.log("val_ssim", val_ssim, on_step=False, on_epoch=True)
-        return val_loss
+
+        if self.ssl_mode == "mae":
+            x = batch["image"].to(self.device)
+            recon, mask = self.model(x)
+            val_loss, val_l1, val_ssim = reconstruction_loss(x, recon, mask)
+            self.log("val_loss", val_loss, on_step=False, on_epoch=True, prog_bar=True)
+            self.log("val_l1", val_l1, on_step=False, on_epoch=True)
+            self.log("val_ssim", val_ssim, on_step=False, on_epoch=True)
+            return val_loss
+
+        elif self.ssl_mode == "byol":
+            v1 = batch["view1"].to(self.device)
+            v2 = batch["view2"].to(self.device)
+            pred1, pred2, target1, target2 = self.model(v1, v2)
+            val_loss = byol_loss(pred1, pred2, target1, target2)
+            self.log("val_loss", val_loss, on_step=False, on_epoch=True, prog_bar=True)
+            return val_loss
+
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        # Update target network after each training step
+        if self.ssl_mode == "byol":
+            self.model.update_moving_average()
 
     def on_validation_epoch_end(self):  # Only test one sample per val epoch instead of all val batch samples
-        batch = self.example_val_batch
-        x = batch["image"][0].to(self.device)  # [0] to take the first sample in the batch
-        x = x.unsqueeze(0)  # Add batch dimension as previous line removes it
-        recon, mask = self(x)
-        visualize_mask_overlay(x, mask, recon, filename=f"epoch_{self.current_epoch:03d}", run_name=self.run_name)
+        # Visualize reconstruction
+        if self.ssl_mode == "mae":
+            batch = self.example_val_batch
+            x = batch["image"][0].to(self.device)  # [0] to take the first sample in the batch
+            x = x.unsqueeze(0)  # Add batch dimension as previous line removes it
+            recon, mask = self.model(x)
+            visualize_mask_overlay(x, mask, recon, filename=f"epoch_{self.current_epoch:03d}", run_name=self.run_name)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=1e-5)
@@ -97,22 +145,25 @@ if __name__ == '__main__':
     # Set parameters that can be passed by the user
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=200)
-    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr', type=float, default=1e-5)
     parser.add_argument('--batch', type=int, default=1)
+    parser.add_argument('--accum_steps', type=int, default=8)
     parser.add_argument('--embed_dim', type=int, default=96)
     parser.add_argument('--fold', type=int, default=1)
-    parser.add_argument('--roi', type=int, nargs=3, default=[120, 120, 96])
+    parser.add_argument('--roi', type=int, nargs=3, default=[96, 96, 96])
     parser.add_argument('--mask_ratio', type=float, default=0.5)
     parser.add_argument('--experiment', type=int, default=1)
     parser.add_argument('--run', type=int, default=1)
     parser.add_argument('--data', type=str, default="brats")
     parser.add_argument("--resume_dir", type=str, default=None)
+    parser.add_argument('--ssl_mode', type=str, default="mae", choices=["mae", "byol"])
     args = parser.parse_args()
 
     # Define hyperparameters
     epochs = args.epochs
     lr = args.lr
     batch_size = args.batch
+    accum_steps = args.accum_steps
     fold = args.fold
     roi = tuple(args.roi)
     num_heads = [3, 6, 12, 24]
@@ -120,6 +171,10 @@ if __name__ == '__main__':
     patch_size = (2, 2, 2)
     embed_dims = [args.embed_dim * (2 ** i) for i in range(5)]
     mask_ratio = args.mask_ratio
+    ssl_mode = args.ssl_mode
+
+    print(f"SSL Mode: {ssl_mode}")
+    print(f"Batch size: {batch_size}, accumulation steps: {accum_steps}, effective batch: {batch_size*accum_steps}")
 
     # Set relevant paths and load data
     if args.data == "brats":
@@ -131,7 +186,7 @@ if __name__ == '__main__':
                                                                                      batch_size=batch_size,
                                                                                      data_dir=data_dir,
                                                                                      split_file=split_file, fold=fold,
-                                                                                     roi=roi)
+                                                                                     roi=roi, ssl_mode=ssl_mode)
     elif args.data == "numorph":
         in_channels = 1
         out_channels = in_channels  # In SSL I am reconstructing the original image, not predicting classes
@@ -139,7 +194,7 @@ if __name__ == '__main__':
         ssl_train_loader, ssl_val_loader, train_loader, val_loader = ssl_data_loader(dataset_type=args.data,
                                                                                      batch_size=batch_size,
                                                                                      data_dir=data_dir,
-                                                                                     roi=roi)
+                                                                                     roi=roi, ssl_mode=ssl_mode)
     elif args.data == "selma":
         in_channels = 1
         out_channels = in_channels  # In SSL I am reconstructing the original image, not predicting classes
@@ -147,7 +202,7 @@ if __name__ == '__main__':
         ssl_train_loader, ssl_val_loader, train_loader, val_loader = ssl_data_loader(dataset_type=args.data,
                                                                                      batch_size=batch_size,
                                                                                      data_dir=data_dir,
-                                                                                     roi=roi)
+                                                                                     roi=roi, ssl_mode=ssl_mode)
 
     else:
         raise ValueError("Unknown dataset")
@@ -155,7 +210,8 @@ if __name__ == '__main__':
     # Set up lightning module
     lit_model = SSLLitSwinUNETR(in_channels=in_channels, embed_dims=embed_dims,
                                 num_heads=num_heads, patch_size=patch_size, window_size=window_size,
-                                epochs=epochs, lr=lr, mask_ratio=mask_ratio)
+                                epochs=epochs, lr=lr, mask_ratio=mask_ratio,
+                                ssl_mode=ssl_mode)
 
     # For the on_validation_epoch_end operations
     lit_model.val_loader = ssl_val_loader
@@ -217,6 +273,7 @@ if __name__ == '__main__':
         logger=logger,
         check_val_every_n_epoch=15,
         precision="16-mixed",
+        accumulate_grad_batches=accum_steps  # Effective batch size = batch_size * acc_steps
     )
 
     trainer.fit(lit_model, ssl_train_loader, ssl_val_loader, ckpt_path=resume_ckpt)

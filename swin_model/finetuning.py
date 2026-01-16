@@ -17,7 +17,7 @@ from ssl_data_loading import ssl_data_loader
 
 
 class LitSwinUNETR(pl.LightningModule):
-    def __init__(self, model=None, dataset="numorph", lr=1e-4, epochs=200, roi=(96, 96, 96), sw_batch_size=4,
+    def __init__(self, model=None, dataset="brats", lr=1e-4, epochs=200, roi=(96, 96, 96), sw_batch_size=4,
                  infer_overlap=0.5):
         super().__init__()
         self.model = model

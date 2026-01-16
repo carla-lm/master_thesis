@@ -14,3 +14,10 @@ swin_model/ssl_tester.py
 swin_model/overfit_test.py
 swin_model/stack_channels.py
 swin_model/tif_stacking.py
+swin_model/debugger.py
+swin_model/requirements.txt
+swin_model/setup_runpod.sh
+swin_model/subvolumes.py
+swin_model/train_ssl.sh
+requirements_conda.txt
+.claude/settings.local.json

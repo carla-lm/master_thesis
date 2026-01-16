@@ -1,45 +1,68 @@
 import os
 import glob
 import json
+import copy
 from monai import data, transforms as T
 from sklearn.model_selection import train_test_split
 from data_loading import get_transforms
 
 
-def extract_first_channel(x):  # Get only C00 channel from vessels
-    return x[0:1] if x.shape[0] > 1 else x
-
-
-def get_ssl_transforms(dataset_type, roi):  # No geometric transforms for MAE SSL
-    if dataset_type in ["numorph", "brats"]:
-        transforms = T.Compose([T.LoadImaged(keys=["image"]),
-                                T.EnsureChannelFirstd(keys=["image"]),
-                                T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.1, upper=99.9, b_min=0.0,
-                                                                  b_max=1.0, clip=True, channel_wise=True),
-                                T.CropForegroundd(keys=["image"], source_key="image",
-                                                  k_divisible=[roi[0], roi[1], roi[2]], allow_smaller=True),
-                                # T.SpatialPadd(keys="image", spatial_size=[roi[0], roi[1], roi[2]]),
-                                T.RandSpatialCropd(keys=["image"], roi_size=[roi[0], roi[1], roi[2]],
-                                                   random_size=False),
-                                T.ToTensord(keys=["image"]),
-                                ])
-    elif dataset_type == "selma":
-        transforms = T.Compose([T.LoadImaged(keys=["image"]),
-                                T.EnsureChannelFirstd(keys=["image"]),
-                                T.Lambdad(
-                                    keys=["image"],
-                                    func=extract_first_channel
-                                ),
-                                T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.1, upper=99.9, b_min=0.0,
-                                                                  b_max=1.0, clip=True, channel_wise=True),
-                                T.CropForegroundd(keys=["image"], source_key="image",
-                                                  k_divisible=[roi[0], roi[1], roi[2]], allow_smaller=True),
-                                # T.SpatialPadd(keys="image", spatial_size=[roi[0], roi[1], roi[2]]),
-                                T.RandSpatialCropd(keys=["image"], roi_size=[roi[0], roi[1], roi[2]],
-                                                   random_size=False),
-                                T.ToTensord(keys=["image"]),
-                                ])
+def get_byol_transforms(roi):
+    transforms = T.Compose([
+        # Each view can have a different section of the sample
+        T.RandSpatialCropd(keys=["image"], roi_size=[roi[0], roi[1], roi[2]], random_size=False),
+        # Spatial augmentations
+        T.RandFlipd(keys=["image"], prob=0.5, spatial_axis=0),
+        T.RandFlipd(keys=["image"], prob=0.5, spatial_axis=1),
+        T.RandFlipd(keys=["image"], prob=0.5, spatial_axis=2),
+        T.RandRotate90d(keys=["image"], prob=0.5, spatial_axes=(0, 1)),
+        # Stronger intensity augmentations to prevent collapse
+        T.RandScaleIntensityd(keys=["image"], factors=0.3, prob=0.8),
+        T.RandShiftIntensityd(keys=["image"], offsets=0.2, prob=0.8),
+        T.RandGaussianNoised(keys=["image"], prob=0.5, mean=0.0, std=0.1),
+        T.RandGaussianSmoothd(keys=["image"], prob=0.3, sigma_x=(0.5, 1.5), sigma_y=(0.5, 1.5), sigma_z=(0.5, 1.5)),
+    ])
     return transforms
+
+
+def get_augmented_views(base_transform, aug_transform):
+    def transform(data):  # return a callable that will be applied to each sample by MONAI
+        data = base_transform(data)
+        view1 = aug_transform(copy.deepcopy(data))
+        view2 = aug_transform(copy.deepcopy(data))
+        return {"image": data["image"], "view1": view1["image"], "view2": view2["image"]}
+
+    return transform
+
+
+def get_ssl_transforms(dataset_type, roi, ssl_mode):
+    if dataset_type not in ["numorph", "brats", "selma"]:
+        raise ValueError(f"Unknown dataset type: {dataset_type}")
+
+    if ssl_mode == "byol":
+        base_transforms = T.Compose([
+            T.LoadImaged(keys=["image"]),
+            T.EnsureChannelFirstd(keys=["image"]),
+            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.1, upper=99.9, b_min=0.0,
+                                              b_max=1.0, clip=True, channel_wise=True),
+            T.ToTensord(keys=["image"]),
+        ])
+        aug_transforms = get_byol_transforms(roi)
+        return get_augmented_views(base_transform=base_transforms, aug_transform=aug_transforms)
+
+    elif ssl_mode == "mae":
+        base_transforms = T.Compose([
+            T.LoadImaged(keys=["image"]),
+            T.EnsureChannelFirstd(keys=["image"]),
+            T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.1, upper=99.9, b_min=0.0,
+                                              b_max=1.0, clip=True, channel_wise=True),
+            T.RandSpatialCropd(keys=["image"], roi_size=[roi[0], roi[1], roi[2]],
+                               random_size=False),
+            T.ToTensord(keys=["image"]),
+        ])
+        return base_transforms
+    else:
+        raise ValueError(f"Unknown ssl_mode: {ssl_mode}")
 
 
 def data_split_brats_ssl(data_dir, split_file, fold, seed=42):
@@ -98,14 +121,14 @@ def data_split_numorph_ssl(data_dir, seed=42):
 
 
 def data_split_selma_ssl(data_dir, seed=42):
-    entity_dirs = ["Alzheimer", "Cells", "Nuclei", "Vessels"]
+    entity_dirs = ["Cells", "Nuclei", "Vessels"]
     # Unannotated Data (for SSL pretraining)
     ssl_imgs = []
     ssl_entity_labels = []  # Track entity type for stratified splitting
     unannotated_dir = os.path.join(data_dir, "Unannotated")
     for entity_idx, entity in enumerate(entity_dirs):
-        all_patches_dir = os.path.join(unannotated_dir, entity, "all_patches")
-        nii_files = sorted(glob.glob(os.path.join(all_patches_dir, "*.nii.gz")))
+        patches_dir = os.path.join(unannotated_dir, entity, "patches")
+        nii_files = sorted(glob.glob(os.path.join(patches_dir, "*.nii.gz")))
         for f in nii_files:
             ssl_imgs.append({"image": [f]})
             ssl_entity_labels.append(entity_idx)
@@ -160,7 +183,7 @@ def data_split_selma_ssl(data_dir, seed=42):
     return ssl_train_files, ssl_val_files, train_files, val_files
 
 
-def ssl_data_loader(dataset_type, batch_size, roi, data_dir, split_file=None, fold=None):
+def ssl_data_loader(dataset_type, batch_size, roi, data_dir, ssl_mode, split_file=None, fold=None):
     if dataset_type == "brats":
         if split_file is None or fold is None:
             raise ValueError("For the BraTS dataset you must provide a split file and a fold")
@@ -182,8 +205,8 @@ def ssl_data_loader(dataset_type, batch_size, roi, data_dir, split_file=None, fo
           f"validation samples: {len(val_files)}")
 
     # Apply transforms to each set
-    ssl_transforms = get_ssl_transforms(dataset_type, roi)
-    train_transforms, val_transforms = get_transforms(dataset_type, roi)
+    ssl_transforms = get_ssl_transforms(dataset_type=dataset_type, roi=roi, ssl_mode=ssl_mode)
+    train_transforms, val_transforms = get_transforms(dataset_type=dataset_type, roi=roi)
 
     # Create DataLoaders for each set
     ssl_train_dataset = data.Dataset(data=ssl_train_files, transform=ssl_transforms)

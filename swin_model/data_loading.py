@@ -13,8 +13,7 @@ def get_transforms(dataset_type, roi):
             T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.1, upper=99.9, b_min=0.0,
                                               b_max=1.0, clip=True, channel_wise=True),
             T.CropForegroundd(keys=["image", "label"], source_key="image",  # Crop out empty background
-                              k_divisible=[roi[0], roi[1], roi[2]], allow_smaller=True), # Ensure crop is divisible by roi
-            # T.SpatialPadd(keys=["image", "label"], spatial_size=[roi[0], roi[1], roi[2]]), # If crop is smaller, pad to roi
+                              k_divisible=[roi[0], roi[1], roi[2]], allow_smaller=True),  # Ensure crop is divisible by roi
             T.RandSpatialCropd(keys=["image", "label"],  # Randomly crop a patch of size roi in image and label
                                roi_size=[roi[0], roi[1], roi[2]], random_size=False),
             # Always return the given roi size
@@ -41,9 +40,6 @@ def get_transforms(dataset_type, roi):
             T.EnsureChannelFirstd(keys=["image", "label"]),  # This adds the single channel as a fourth dimension
             T.ScaleIntensityRangePercentilesd(keys=["image"], lower=0.1, upper=99.9, b_min=0.0,
                                               b_max=1.0, clip=True, channel_wise=True),
-            T.CropForegroundd(keys=["image", "label"], source_key="image",
-                              k_divisible=[roi[0], roi[1], roi[2]], allow_smaller=True),
-            # T.SpatialPadd(keys=["image", "label"], spatial_size=[roi[0], roi[1], roi[2]]),
             T.RandSpatialCropd(keys=["image", "label"], roi_size=[roi[0], roi[1], roi[2]], random_size=False),
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
             T.RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
@@ -108,7 +104,7 @@ def data_split_numorph(data_dir, test_size, seed):
 
 
 def data_split_selma(data_dir, test_size, seed):
-    entity_dirs = ["Alzheimer", "Cells", "Nuclei", "Vessels"]
+    entity_dirs = ["Cells", "Nuclei", "Vessels"]
     files = []
     entity_labels = []  # Track entity type for stratified splitting
     annotated_dir = os.path.join(data_dir, "Annotated")
