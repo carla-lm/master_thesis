@@ -100,11 +100,11 @@ if __name__ == '__main__':
     # Set parameters that can be passed by the user
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr', type=float, default=1e-5)
     parser.add_argument('--batch', type=int, default=1)
     parser.add_argument('--embed_dim', type=int, default=96)
     parser.add_argument('--fold', type=int, default=1)
-    parser.add_argument('--roi', type=int, nargs=3, default=[120, 120, 96])
+    parser.add_argument('--roi', type=int, nargs=3, default=[96, 96, 96])
     parser.add_argument('--val_every', type=int, default=10)
     parser.add_argument('--experiment', type=int, default=10)
     parser.add_argument('--data', type=str, default="selma")
@@ -139,7 +139,7 @@ if __name__ == '__main__':
                                                          batch_size=batch_size,
                                                          data_dir=data_dir,
                                                          split_file=split_file, fold=fold,
-                                                         roi=roi)
+                                                         roi=roi, ssl_mode=None)
     elif args.data == "numorph":
         in_channels = 1
         out_channels = 1
@@ -147,7 +147,7 @@ if __name__ == '__main__':
         _, _, train_loader, val_loader = ssl_data_loader(dataset_type=args.data,
                                                          batch_size=batch_size,
                                                          data_dir=data_dir,
-                                                         roi=roi)
+                                                         roi=roi, ssl_mode=None)
     elif args.data == "selma":
         in_channels = 1
         out_channels = 1
@@ -155,7 +155,7 @@ if __name__ == '__main__':
         _, _, train_loader, val_loader = ssl_data_loader(dataset_type=args.data,
                                                          batch_size=batch_size,
                                                          data_dir=data_dir,
-                                                         roi=roi)
+                                                         roi=roi, ssl_mode=None)
 
     else:
         raise ValueError("Unknown dataset")

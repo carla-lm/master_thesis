@@ -21,3 +21,4 @@ swin_model/subvolumes.py
 swin_model/train_ssl.sh
 requirements_conda.txt
 .claude/settings.local.json
+/swin_model/.claude

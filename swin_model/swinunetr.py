@@ -405,13 +405,13 @@ class SwinUNETR3D(nn.Module):
 
     def forward(self, x):
         # print("Raw Input Shape:", x.shape)
-        x = x.permute(0, 3, 4, 2, 1).contiguous()  # Input has shape (B, C, D, H, W), make it (B, H, W, D, C)
+        x = x.permute(0, 2, 3, 4, 1).contiguous()  # Input has shape (B, C, H, W, D), make it (B, H, W, D, C)
         # print("Encoder-ready Input Shape:", x.shape)
         # Encoding Stage (Linear Embedding + Swin Transformers + Merging Layers)
         encoder_output, skips = self.encoder(x)
         # print("Encoder Output Shape:", encoder_output.shape)
         # for i, skip in enumerate(skips):
-        # print(f"Skip {i + 1} shape: {skip.shape}")
+            # print(f"Skip {i + 1} shape: {skip.shape}")
 
         # Make Skips and Output Shape (B, C, D, H, W) for Decoder
         encoder_output = encoder_output.permute(0, 4, 3, 1, 2).contiguous()  # (B, C, D, H, W)
@@ -419,14 +419,15 @@ class SwinUNETR3D(nn.Module):
         encoder_output, skips = self.processor(encoder_output, skips)
         # print("Processed Encoder Output Shape:", encoder_output.shape)
         # for i, skip in enumerate(skips):
-        # print(f"Processed Skip {i + 1} shape: {skip.shape}")
+            # print(f"Processed Skip {i + 1} shape: {skip.shape}")
 
         # Decoding Stage (Upsampling Blocks + ResCNN Blocks)
         decoder_output = self.decoder(encoder_output, skips)
         # print("Decoder Output Shape:", decoder_output.shape)
 
         # Obtain Final Segmented Output
-        final_output = self.seg_head(decoder_output)
+        final_output = self.seg_head(decoder_output)  # (B, C, D, H, W)
+        final_output = final_output.permute(0, 1, 3, 4, 2).contiguous()  # (B, C, H, W, D)
         # print("Final Output Shape:", final_output.shape)
 
         return final_output

@@ -10,7 +10,13 @@ from ssl_data_loading import ssl_data_loader
 from utils import visualize_mask_overlay
 from monai.losses import SSIMLoss
 
-ssim_loss_fn = SSIMLoss(spatial_dims=3, reduction='mean')
+ssim_loss_fn = SSIMLoss(
+    spatial_dims=3,
+    data_range=1.0,  # Match [0,1] normalized data
+    k1=0.01,  # For stability
+    k2=0.03,  # For stability
+    reduction='mean'
+)
 l1_loss_fn = torch.nn.L1Loss()
 mse_loss_fn = torch.nn.MSELoss()
 
@@ -20,12 +26,17 @@ def reconstruction_loss(img, recon, mask, ssim_weight=0.1):
     mask = mask.to(dtype=img.dtype)
     img_masked = img * mask
     recon_masked = recon * mask
-    # L1 or MSE loss on masked region only
+    # L1 loss on masked region only
     loss_l1 = l1_loss_fn(recon_masked, img_masked)
-    # loss_mse = mse_loss_fn(recon_masked, img_masked)
-    # SSIM loss on entire image
-    loss_ssim = ssim_loss_fn(img, recon + 1e-6)
-    total_loss = loss_l1 + ssim_weight * loss_ssim
+    # SSIM loss on masked regions only for consistency with L1
+    loss_ssim = ssim_loss_fn(img_masked, recon_masked)
+    # Fall back to L1 only if SSIM fails with NaNs
+    if torch.isnan(loss_ssim) or torch.isinf(loss_ssim):
+        loss_ssim = torch.tensor(0.0, device=img.device, dtype=img.dtype)
+        total_loss = loss_l1
+    else:
+        total_loss = loss_l1 + ssim_weight * loss_ssim
+
     return total_loss, loss_l1, loss_ssim
 
 
@@ -82,6 +93,14 @@ class SSLLitSwinUNETR(pl.LightningModule):
             x = batch["image"].to(self.device)
             recon, mask = self.model(x)
             loss, loss_l1, loss_ssim = reconstruction_loss(x, recon, mask)
+
+            # Debug: log warning if NaN/Inf detected
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"[WARN] NaN/Inf loss at epoch {self.current_epoch}, batch {batch_idx}")
+                print(f"  recon: [{recon.min():.4f}, {recon.max():.4f}]")
+                print(f"  input: [{x.min():.4f}, {x.max():.4f}]")
+                print(f"  L1: {loss_l1.item():.6f}, SSIM: {loss_ssim.item():.6f}")
+
             self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
             self.log("train_l1", loss_l1, on_step=False, on_epoch=True)
             self.log("train_ssim", loss_ssim, on_step=False, on_epoch=True)

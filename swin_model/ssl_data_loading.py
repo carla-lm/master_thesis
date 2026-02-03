@@ -61,6 +61,7 @@ def get_ssl_transforms(dataset_type, roi, ssl_mode):
             T.ToTensord(keys=["image"]),
         ])
         return base_transforms
+
     else:
         raise ValueError(f"Unknown ssl_mode: {ssl_mode}")
 
@@ -204,19 +205,21 @@ def ssl_data_loader(dataset_type, batch_size, roi, data_dir, ssl_mode, split_fil
           f"| Fine-tune training samples: {len(train_files)} | Fine-tune "
           f"validation samples: {len(val_files)}")
 
-    # Apply transforms to each set
-    ssl_transforms = get_ssl_transforms(dataset_type=dataset_type, roi=roi, ssl_mode=ssl_mode)
+    # Apply transforms and create DataLoaders for each set
+    ssl_train_dataloader = None
+    ssl_val_dataloader = None
+
+    if ssl_mode is not None:  # Only fill the ssl dataloaders in ssl training, not in finetuning
+        ssl_transforms = get_ssl_transforms(dataset_type=dataset_type, roi=roi, ssl_mode=ssl_mode)
+        ssl_train_dataset = data.Dataset(data=ssl_train_files, transform=ssl_transforms)
+        ssl_train_dataloader = data.DataLoader(ssl_train_dataset, batch_size=batch_size, shuffle=True,
+                                               num_workers=8, pin_memory=True, persistent_workers=True)
+
+        ssl_val_dataset = data.Dataset(data=ssl_val_files, transform=ssl_transforms)
+        ssl_val_dataloader = data.DataLoader(ssl_val_dataset, batch_size=1, shuffle=False,
+                                             num_workers=8, pin_memory=True, persistent_workers=True)
+
     train_transforms, val_transforms = get_transforms(dataset_type=dataset_type, roi=roi)
-
-    # Create DataLoaders for each set
-    ssl_train_dataset = data.Dataset(data=ssl_train_files, transform=ssl_transforms)
-    ssl_train_dataloader = data.DataLoader(ssl_train_dataset, batch_size=batch_size, shuffle=True,
-                                           num_workers=8, pin_memory=True, persistent_workers=True)
-
-    ssl_val_dataset = data.Dataset(data=ssl_val_files, transform=ssl_transforms)
-    ssl_val_dataloader = data.DataLoader(ssl_val_dataset, batch_size=1, shuffle=False,
-                                         num_workers=8, pin_memory=True, persistent_workers=True)
-
     train_dataset = data.Dataset(data=train_files, transform=train_transforms)
     train_dataloader = data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
                                        num_workers=8, pin_memory=True, persistent_workers=True)

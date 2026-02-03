@@ -143,9 +143,9 @@ def visualize_mask_overlay(x, mask, recon, filename="overlay.png", run_name="Run
     save_dir = os.path.join("Figures", run_name)
     os.makedirs(save_dir, exist_ok=True)
     # Convert tensors to numpy arrays and discard batch and channel dimensions
-    x = x[0, 0].detach().cpu().numpy()  # (B, C, D, H, W) --> (D, H, W)
-    recon = recon[0, 0].detach().cpu().numpy()  # (B, C, D, H, W) --> (D, H, W)
-    mask = mask[0, 0].detach().cpu().numpy()  # (B, 1, D, H, W) --> (D, H, W)
+    x = x[0, 0].detach().cpu().numpy()  # (B, C, H, W, D) --> (H, W, D)
+    recon = recon[0, 0].detach().cpu().numpy()  # (B, C, H, W, D) --> (H, W, D)
+    mask = mask[0, 0].detach().cpu().numpy()  # (B, 1, H, W, D) --> (H, W, D)
 
     # Select middle z-slice
     mid_z = x.shape[2] // 2
@@ -222,14 +222,14 @@ def visualize_byol_augmentations(dataset_type, data_dir, roi):
     print("View 2 shape: ", view2.shape)
 
     if dataset_type == "brats":  # Select flair modality
-        base_img = base_img[3]  # (D, H, W)
-        view1 = view1[3]  # (D, H, W)
-        view2 = view2[3]  # (D, H, W)
+        base_img = base_img[3]  # (H, W, D)
+        view1 = view1[3]  # (H, W, D)
+        view2 = view2[3]  # (H, W, D)
 
     else:    # Convert tensors to numpy arrays and discard batch and channel dimensions
-        base_img = base_img[0].detach().cpu().numpy()  # (C, D, H, W) --> (D, H, W)
-        view1 = view1[0].detach().cpu().numpy()  # (C, D, H, W) --> (D, H, W)
-        view2 = view2[0].detach().cpu().numpy()  # (C, D, H, W) --> (D, H, W)
+        base_img = base_img[0].detach().cpu().numpy()  # (C, H, W, D) --> (H, W, D)
+        view1 = view1[0].detach().cpu().numpy()  # (C, H, W, D) --> (H, W, D)
+        view2 = view2[0].detach().cpu().numpy()  # (C, H, W, D) --> (H, W, D)
 
     # Select middle z-slice
     orig_z = original.shape[2] // 2
