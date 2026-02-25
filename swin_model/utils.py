@@ -1,11 +1,10 @@
 import os
 import nibabel as nib
 import matplotlib.pyplot as plt
-from data_loading import get_transforms
-from ssl_data_loading import get_ssl_transforms, get_byol_transforms
+from transforms import get_supervised_transforms, get_ssl_transforms, get_byol_transforms
 import copy
 import matplotlib
-# matplotlib.use("TkAgg")
+matplotlib.use("TkAgg")
 
 
 def visualize_data_numorph(data_dir, roi):
@@ -19,7 +18,7 @@ def visualize_data_numorph(data_dir, roi):
 
     # Apply the transforms to the sample
     sample_dict = {"image": img_path, "label": label_path}
-    transforms = get_transforms(dataset_type="numorph", roi=roi)[1]  # apply the val transforms
+    transforms = get_supervised_transforms(dataset_type="numorph", roi=roi)[1]  # apply the val transforms
     transformed = transforms(sample_dict)
     img_t = transformed["image"]
     label_t = transformed["label"]
@@ -60,7 +59,7 @@ def visualize_data_selma(data_dir, roi):
 
     # Apply the transforms to the sample
     sample_dict = {"image": img_path, "label": label_path}
-    transforms = get_transforms(dataset_type="selma", roi=roi)[1]  # apply the train transforms
+    transforms = get_supervised_transforms(dataset_type="selma", roi=roi)[1]  # apply the train transforms
     transformed = transforms(sample_dict)
     img_t = transformed["image"]
     label_t = transformed["label"]
@@ -109,7 +108,7 @@ def visualize_data_brats(data_dir, roi):
         "label": os.path.join(data_dir, "BraTS2021_00006/BraTS2021_00006_seg.nii.gz")
     }
     # Apply the transforms to the sample
-    preview_trans = get_transforms(dataset_type="brats", roi=roi)
+    preview_trans = get_supervised_transforms(dataset_type="brats", roi=roi)
     transformed = preview_trans[1](image_dict)  # 0 for all transforms, 1 for deterministic transforms
     img_t = transformed["image"]
     label_t = transformed["label"]
@@ -138,9 +137,9 @@ def visualize_data_brats(data_dir, roi):
     plt.show()
 
 
-def visualize_mask_overlay(x, mask, recon, filename="overlay.png", run_name="Run"):
-    # Save figure
-    save_dir = os.path.join("Figures", run_name)
+def visualize_mask_overlay(x, mask, recon, filename="overlay.png", save_dir=None):
+    if save_dir is None:
+        save_dir = "Figures"
     os.makedirs(save_dir, exist_ok=True)
     # Convert tensors to numpy arrays and discard batch and channel dimensions
     x = x[0, 0].detach().cpu().numpy()  # (B, C, H, W, D) --> (H, W, D)

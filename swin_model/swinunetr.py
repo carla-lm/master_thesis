@@ -6,13 +6,12 @@ import torch.nn.functional as F
 
 class PatchEmbedding3D(nn.Module):
     # Patch size and embedding dimension (defined as C in the paper) are modifiable hyperparameters
-    def __init__(self, in_channels, patch_size, embed_dim):
+    def __init__(self, in_channels, patch_size, embed_dim, drop_rate=0.0):
         super().__init__()
         self.patch_size = patch_size
-        self.skip_embed = nn.Sequential(nn.Conv3d(in_channels, embed_dim, kernel_size=3, padding=1),
-                                        nn.InstanceNorm3d(embed_dim), nn.GELU())
-        # self.skip_embed = ResBlock(in_channels, embed_dim)  # So it is consistent with other skips, and more robust
+        self.skip_embed = ResBlock(in_channels, embed_dim)  # So it is consistent with other skips, and more robust
         self.patch_embed = nn.Conv3d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
+        self.pos_drop = nn.Dropout(drop_rate)
 
     def forward(self, x):
         ph, pw, pd = self.patch_size
@@ -22,13 +21,13 @@ class PatchEmbedding3D(nn.Module):
         pad_d = (pd - D % pd) % pd
         if pad_h > 0 or pad_w > 0 or pad_d > 0:
             x = F.pad(x, (0, 0, 0, pad_d, 0, pad_w, 0, pad_h))
-            # print("Embedding Padded Shape:", x.shape)
 
         x = x.permute(0, 4, 3, 1, 2).contiguous()  # (B, S, D, H, W) as required by Conv3D
         x1 = self.skip_embed(x)  # (B, C, D, H, W) For the first skip connection (no downsampling)
         x2 = self.patch_embed(x)  # (B, C, D', H', W') For the second skip connection (downsampling)
         x1 = x1.permute(0, 3, 4, 2, 1).contiguous()  # (B, H, W, D, C)
         x2 = x2.permute(0, 3, 4, 2, 1).contiguous()  # (B, H', W', D', C)
+        x2 = self.pos_drop(x2)  # Positional dropout after patch embedding
         return x1, x2
 
 
@@ -67,7 +66,9 @@ class MLP(nn.Module):
         self.drop_layer = nn.Dropout(dropout_rate)
 
     def forward(self, x):
-        return self.drop_layer(self.lin_layer2(self.act_layer(self.lin_layer1(x))))
+        x = self.drop_layer(self.act_layer(self.lin_layer1(x)))
+        x = self.drop_layer(self.lin_layer2(x))
+        return x
 
 
 class WindowAttention3D(nn.Module):
@@ -116,8 +117,10 @@ class WindowAttention3D(nn.Module):
         # Split QKV into Q,K,V, then split each of those in head_dim chunks across heads
         qkv = qkv.reshape(B_, N, 3, self.num_heads, self.head_dim)
         q, k, v = qkv.permute(2, 0, 3, 1, 4)  # Each has dimension (B_, num_heads, N, head_dim)
+        # Pre-scale Q for better numerical stability (especially with float16)
+        q = q * self.attn_scale
         # Each head calculates its own scaled attention scores between all N tokens of each window
-        attn = (q @ k.transpose(-2, -1)) * self.attn_scale  # (B_, num_heads, N_queries, N_keys)
+        attn = q @ k.transpose(-2, -1)  # (B_, num_heads, N_queries, N_keys)
         # Add a learnt relative position bias per head
         bias = self.relative_position_bias_table[self.relative_position_index.view(-1)]
         bias = bias.view(N, N, -1).permute(2, 0, 1)  # (num_heads, N, N)
@@ -134,7 +137,7 @@ class WindowAttention3D(nn.Module):
 
         # Softmax is applied over the keys dimension to get a probability distribution of the keys for each query
         attn = self.softmax(attn)
-        attn = self.attn_drop(attn)
+        attn = self.attn_drop(attn).to(v.dtype)
         # Calculate the weighted attention, concatenate the heads' outputs along the embedding dimension
         attn = (attn @ v).transpose(1, 2).reshape(B_, N, C)
         attn = self.out_proj(attn)  # Fuse the info from all heads
@@ -145,13 +148,13 @@ class WindowAttention3D(nn.Module):
 def compute_attention_mask(input_shape, window_size, shift_size):
     H, W, D = input_shape
     mask = torch.zeros((1, H, W, D, 1))
-    id = 0  # Unique number for each mask region
+    region_id = 0  # Unique number for each mask region
     # Divide input into blocks of three types: before window region, partially overlapping region, shifted window region
     for h in (slice(0, -window_size[0]), slice(-window_size[0], -shift_size[0]), slice(-shift_size[0], None)):
         for w in (slice(0, -window_size[1]), slice(-window_size[1], -shift_size[1]), slice(-shift_size[1], None)):
             for d in (slice(0, -window_size[2]), slice(-window_size[2], -shift_size[2]), slice(-shift_size[2], None)):
-                mask[:, h, w, d, :] = id  # Each region gets a unique label
-                id += 1
+                mask[:, h, w, d, :] = region_id  # Each region gets a unique label
+                region_id += 1
 
     mask_windows = window_partition(mask, window_size)  # (num_windows, window_size^3, 1)
     mask_windows = mask_windows.squeeze(-1)  # Remove last dimension
@@ -179,42 +182,42 @@ class SwinTransformerBlock3D(nn.Module):
         wh, ww, wd = self.window_size
         residual = x  # The input will be used later for a residual connection
         x = self.norm1(x)  # Apply 1st LN
-        if any(s > 0 for s in self.shift_size):
-            shifted_x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1], -self.shift_size[2]),
-                                   dims=(1, 2, 3))
-        else:
-            shifted_x = x
-
-        # Compute padding needed for window partitioning
+        # Pad first so spatial dims are divisible by window size
         pad_h = (wh - orig_shape[1] % wh) % wh
         pad_w = (ww - orig_shape[2] % ww) % ww
         pad_d = (wd - orig_shape[3] % wd) % wd
         if pad_h > 0 or pad_w > 0 or pad_d > 0:
-            shifted_x = F.pad(shifted_x, (0, 0, 0, pad_d, 0, pad_w, 0, pad_h))
-            # print(f"Padded for window partition: {shifted_x.shape}")
+            x = F.pad(x, (0, 0, 0, pad_d, 0, pad_w, 0, pad_h))
 
-        padded_shape = shifted_x.shape
-        x_windows = window_partition(shifted_x, self.window_size)  # (num_windows * B, window_size^3, C)
-
-        # Compute attention mask only for shifted blocks
+        padded_shape = x.shape
+        # Shift windows (cyclic shift for SW-MSA) and compute attention mask internally
         mask = None
         if any(s > 0 for s in self.shift_size):
-            mask = compute_attention_mask(padded_shape[1:4], self.window_size, self.shift_size)
+            shifted_x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1], -self.shift_size[2]),
+                                   dims=(1, 2, 3))
+            mask = compute_attention_mask(
+                (padded_shape[1], padded_shape[2], padded_shape[3]),
+                self.window_size, self.shift_size)
+        else:
+            shifted_x = x
 
+        x_windows = window_partition(shifted_x, self.window_size)  # (num_windows * B, window_size^3, C)
         attn_windows = self.attn(x_windows, mask)
-        shifted_x = window_reverse(attn_windows, self.window_size, padded_shape)  # (B, H, W, D, C)
+        shifted_x = window_reverse(attn_windows, self.window_size, padded_shape)  # (B, H_pad, W_pad, D_pad, C)
+
+        # Reverse shift
         if any(s > 0 for s in self.shift_size):
             x = torch.roll(shifted_x, shifts=(self.shift_size[0], self.shift_size[1], self.shift_size[2]),
                            dims=(1, 2, 3))
         else:
             x = shifted_x
 
-        if pad_h > 0 or pad_w > 0 or pad_d > 0:  # Remove padding
+        # Remove padding
+        if pad_h > 0 or pad_w > 0 or pad_d > 0:
             x = x[:, :orig_shape[1], :orig_shape[2], :orig_shape[3], :]
-            # print(f"Pad Removed: {x.shape}")
 
-        x = residual + x  # Apply first residual connection to the attention output
-        x = x + self.mlp(self.norm2(x))  # Apply 2nd LN, MLP and second residual connection
+        x = residual + x  # Apply first residual connection
+        x = x + self.mlp(self.norm2(x))  # Apply 2nd LN, MLP, second residual connection
         return x
 
 
@@ -259,7 +262,7 @@ class ResBlock(nn.Module):
         self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
         self.norm1 = nn.InstanceNorm3d(out_channels)  # Better for CNNs than LayerNorm
         self.norm2 = nn.InstanceNorm3d(out_channels)  # Better for CNNs than LayerNorm
-        self.act = nn.GELU()
+        self.act = nn.LeakyReLU(negative_slope=0.01, inplace=True)
         # Adjust residual connection if channels differ
         self.downsample = None
         if in_channels != out_channels:
@@ -319,6 +322,7 @@ class SwinUNETREncoder3D(nn.Module):  # Whole encoding pipeline
         self.patch_embed = PatchEmbedding3D(in_channels=in_channels, patch_size=patch_size, embed_dim=embed_dims[0])
         self.trans_blocks = nn.ModuleList()
         self.merge_layers = nn.ModuleList()
+        self.stage_norms = nn.ModuleList()  # LayerNorm for each stage output
         shift = tuple(w // 2 for w in window_size)
 
         for i in range(self.num_stages):
@@ -330,17 +334,16 @@ class SwinUNETREncoder3D(nn.Module):  # Whole encoding pipeline
             )
             self.trans_blocks.append(stage_blocks)
             self.merge_layers.append(PatchMerging3D(embed_dims[i]))
+            self.stage_norms.append(nn.LayerNorm(embed_dims[i + 1]))  # Norm for post-merge output
 
     def forward(self, x):
         skips = []
         skip_embed, x = self.patch_embed(x)
         skips.extend([skip_embed, x])
-        # print("Patch Embedding Output Shape:", x.shape)
         for i in range(self.num_stages):
             x = self.trans_blocks[i](x)
-            # print(f"Stage {i + 1} Output Shape (before merging):", x.shape)
             x = self.merge_layers[i](x)
-            # print(f"Stage {i + 1} Output Shape (after merging):", x.shape)
+            x = self.stage_norms[i](x)
             if i < self.num_stages - 1:
                 skips.append(x)  # Save the transformer output after stages 1-3 for the skip connection
 
@@ -387,8 +390,6 @@ class SegmentationHead(nn.Module):
     def __init__(self, in_channels, num_classes):
         super().__init__()
         self.head = nn.Conv3d(in_channels, num_classes, kernel_size=1)
-        # For tasks where each voxel can only belong to one class you don't use sigmoid, you output raw logits
-        # self.act = nn.Sigmoid()  # Output in [0,1] range --> only if you have one class or voxel can be multiclass
 
     def forward(self, x):
         return self.head(x)  # (B, num_classes, D, H, W)
@@ -448,7 +449,7 @@ if __name__ == "__main__":
     patch_size = (2, 2, 2)
     embed_dims = [48, 96, 192, 384, 768]
     num_heads = [3, 6, 12, 24]
-    window_size = (7, 7, 7)
+    window_size = (8, 8, 8)
     num_classes = 3
 
     # Instantiate and run model

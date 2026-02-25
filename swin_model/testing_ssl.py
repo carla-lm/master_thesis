@@ -3,7 +3,7 @@ import torch
 import argparse
 import numpy as np
 from ssl_training import SSLLitSwinUNETR
-from ssl_data_loading import ssl_data_loader
+from data_loading import ssl_data_loader
 from utils import visualize_mask_overlay
 
 
@@ -25,14 +25,14 @@ def unpad(x, pads):
 
 
 if __name__ == '__main__':
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     torch.backends.cudnn.benchmark = True
     torch.set_float32_matmul_precision('medium')  # Trade off precision for performance
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default="brats")
-    parser.add_argument("--roi", type=int, nargs=3, default=[96, 96, 96])
+    parser.add_argument("--roi", type=int, nargs=3, default=[128, 128, 128])
     parser.add_argument('--fold', type=int, default=1)
     parser.add_argument("--ckpt_path", type=str)
     parser.add_argument("--num_samples", type=int, default=1)
@@ -47,13 +47,19 @@ if __name__ == '__main__':
     if args.data == "brats":
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_brats")
         split_file = os.path.join(data_dir, "data_split.json")
-        _, test_loader, _, _ = ssl_data_loader(dataset_type=args.data, batch_size=1, roi=roi, data_dir=data_dir,
-                                               split_file=split_file,
-                                               fold=fold)  # Load the test data (same as validation data)
+        test_loader, _, _, _ = ssl_data_loader(dataset_type=args.data, batch_size=1, roi=roi, data_dir=data_dir,
+                                               split_file=split_file, fold=fold,
+                                               ssl_mode="mim")  # Use SSL train data for reconstruction visualization
 
     elif args.data == "numorph":
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_numorph")
-        _, test_loader, _, _ = ssl_data_loader(dataset_type=args.data, batch_size=1, roi=roi, data_dir=data_dir)
+        test_loader, _, _, _ = ssl_data_loader(dataset_type=args.data, batch_size=1, roi=roi, data_dir=data_dir,
+                                               ssl_mode="mim")  # Use SSL train data for reconstruction visualization
+
+    elif args.data == "selma":
+        data_dir = os.path.join(os.getcwd(), "TrainingData", "data_selma")
+        test_loader, _, _, _ = ssl_data_loader(dataset_type=args.data, batch_size=1, roi=roi, data_dir=data_dir,
+                                               ssl_mode="mim")
 
     else:
         raise ValueError("Unknown dataset")
@@ -74,9 +80,9 @@ if __name__ == '__main__':
     with torch.no_grad():
         for idx, sample_idx in enumerate(selected_indices, start=1):
             batch = test_loader.dataset[sample_idx]
-            x = batch[0]["image"].unsqueeze(0).to(device)  # Add batch dimension (B, C, D, H, W)
+            x = batch["image"].unsqueeze(0).to(device)  # Add batch dimension (B, C, D, H, W)
             print(x.shape)
-            x_pad, pads = pad_to_window(x, window_size=(6, 6, 6))
+            x_pad, pads = pad_to_window(x, window_size=(8, 8, 8))
             recon, mask = model(x_pad)
             recon = unpad(recon, pads)
             mask = unpad(mask, pads)

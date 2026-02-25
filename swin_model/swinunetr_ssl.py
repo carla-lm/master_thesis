@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from swinunetr import SwinUNETREncoder3D
-from ssl_data_loading import get_ssl_transforms, get_byol_transforms
+from transforms import get_ssl_transforms, get_byol_transforms
 
 
 def patch_level_mask(B, H, W, D, mask_ratio, device):
@@ -59,7 +59,7 @@ class SSLDecoder3D(nn.Module):  # Decoder to reconstruct masked voxels from the 
         return reconstruction
 
 
-class MAESwinUNETR3D(nn.Module):
+class MIMSwinUNETR3D(nn.Module):
     def __init__(self, in_channels, patch_size, embed_dims, num_heads, window_size, mask_ratio):
         super().__init__()
         self.in_channels = in_channels
@@ -67,7 +67,7 @@ class MAESwinUNETR3D(nn.Module):
         self.embed_dims = embed_dims
         self.num_heads = num_heads
         self.window_size = window_size
-        self.mask_ratio = mask_ratio  # Ratio of image to be kept: higher = more visible patches
+        self.mask_ratio = mask_ratio  # Ratio of patches to mask: higher = fewer visible patches
         self.encoder = SwinUNETREncoder3D(in_channels=self.in_channels, patch_size=self.patch_size,
                                           embed_dims=self.embed_dims, num_heads=self.num_heads,
                                           window_size=self.window_size)
@@ -87,6 +87,7 @@ class MAESwinUNETR3D(nn.Module):
         for i in range(self.encoder.num_stages):
             x = self.encoder.trans_blocks[i](x)
             x = self.encoder.merge_layers[i](x)
+            x = self.encoder.stage_norms[i](x)
 
         latent = x.permute(0, 4, 3, 1, 2).contiguous()  # (B, C, D_lat, H_lat, W_lat)
         recon = self.decoder(latent)
@@ -176,6 +177,7 @@ class BYOLSwinUNETR3D(nn.Module):
         for i in range(encoder.num_stages):
             x = encoder.trans_blocks[i](x)
             x = encoder.merge_layers[i](x)
+            x = encoder.stage_norms[i](x)
 
         B, H, W, D, C = x.shape
         # Global average pool: flatten the 3D feature map into a single 1D vector per image
@@ -217,25 +219,20 @@ if __name__ == "__main__":
     patch_size = (2, 2, 2)
     embed_dims = [48, 96, 192, 384, 768]
     num_heads = [3, 6, 12, 24]
-    window_size = (6, 6, 6)
+    window_size = (8, 8, 8)
     num_classes = 3
-    roi = (120, 120, 96)
+    roi = (128, 128, 128)
 
     # Get BYOL views
     base_transform = get_ssl_transforms("brats", roi, ssl_mode="byol")
     sample_dict = {"image": [img_path]}
     base_result = base_transform(copy.deepcopy(sample_dict))
     base_img = base_result["image"]
-    aug_transform = get_byol_transforms(roi)
-    view1_result = aug_transform(copy.deepcopy(base_result))
-    view2_result = aug_transform(copy.deepcopy(base_result))
-    view1 = view1_result["image"]
-    view2 = view2_result["image"]
-    view1 = view1.unsqueeze(0)
-    view2 = view2.unsqueeze(0)
+    view1 = base_result["view1"].unsqueeze(0)
+    view2 = base_result["view2"].unsqueeze(0)
 
     # Instantiate and run models
-    model = MAESwinUNETR3D(in_channels=img.shape[1],
+    model = MIMSwinUNETR3D(in_channels=img.shape[1],
                            patch_size=patch_size,
                            embed_dims=embed_dims,
                            num_heads=num_heads,
@@ -258,4 +255,4 @@ if __name__ == "__main__":
     img = (img - img.min()) / (img.max() - img.min() + 1e-8)
     recon = (recon - recon.min()) / (recon.max() - recon.min() + 1e-8)
     visualize_mask_overlay(img, mask, recon)
-    visualize_byol_augmentations(dataset_type="brats", data_dir="TrainingData/data_brats", roi=(120, 120, 96))
+    visualize_byol_augmentations(dataset_type="selma", data_dir="TrainingData/data_selma", roi=(120, 120, 96))

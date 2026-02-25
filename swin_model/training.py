@@ -13,11 +13,11 @@ from monai.metrics import DiceMetric, MeanIoU
 from monai.data import decollate_batch
 from monai.utils.enums import MetricReduction
 from swinunetr import SwinUNETR3D
-from data_loading import data_loader
+from data_loading import ssl_data_loader
 
 
 class LitSwinUNETR(pl.LightningModule):
-    def __init__(self, model=None, dataset="brats", lr=1e-4, epochs=200, roi=(64, 64, 64), sw_batch_size=4,
+    def __init__(self, model=None, dataset="brats", lr=1e-4, epochs=100, roi=(128, 128, 128), sw_batch_size=4,
                  infer_overlap=0.5):
         super().__init__()
         self.model = model
@@ -99,12 +99,12 @@ if __name__ == '__main__':
 
     # Set parameters that can be passed by the user
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--batch', type=int, default=1)
     parser.add_argument('--embed_dim', type=int, default=96)
     parser.add_argument('--fold', type=int, default=1)
-    parser.add_argument('--roi', type=int, nargs=3, default=[120, 120, 96])
+    parser.add_argument('--roi', type=int, nargs=3, default=[96, 96, 96])
     parser.add_argument('--val_every', type=int, default=10)
     parser.add_argument('--experiment', type=int, default=1)
     parser.add_argument('--data', type=str, required=True)
@@ -120,7 +120,7 @@ if __name__ == '__main__':
     feature_size = args.embed_dim
     val_every = args.val_every
     num_heads = [3, 6, 12, 24]
-    window_size = (6, 6, 6)
+    window_size = (8, 8, 8)
     patch_size = (2, 2, 2)
     embed_dims = [args.embed_dim * (2 ** i) for i in range(5)]
     sw_batch_size = 4
@@ -132,22 +132,24 @@ if __name__ == '__main__':
         out_channels = 3
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_brats")  # Path is current directory + data_brats
         split_file = os.path.join(data_dir, "data_split.json")  # Json path is data directory + json filename
-        train_loader, val_loader = data_loader(dataset_type=args.data, batch_size=batch_size, data_dir=data_dir,
-                                               split_file=split_file, fold=fold, roi=roi)
+        _, train_loader, val_loader, _ = ssl_data_loader(dataset_type=args.data, batch_size=batch_size,
+                                                         data_dir=data_dir,
+                                                         split_file=split_file, fold=fold, roi=roi)
     elif args.data == "numorph":
         in_channels = 1
         out_channels = 1
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_numorph")
-        train_loader, val_loader = data_loader(dataset_type=args.data, batch_size=batch_size, data_dir=data_dir,
-                                               roi=roi)
+        _, train_loader, val_loader, _ = ssl_data_loader(dataset_type=args.data, batch_size=batch_size,
+                                                         data_dir=data_dir,
+                                                         roi=roi)
     elif args.data == "selma":
         in_channels = 1
         out_channels = 1
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_selma")
-        train_loader, val_loader = data_loader(dataset_type=args.data,
-                                               batch_size=batch_size,
-                                               data_dir=data_dir,
-                                               roi=roi)
+        _, train_loader, val_loader, _ = ssl_data_loader(dataset_type=args.data,
+                                                         batch_size=batch_size,
+                                                         data_dir=data_dir,
+                                                         roi=roi)
 
     else:
         raise ValueError("Unknown dataset")
@@ -168,13 +170,17 @@ if __name__ == '__main__':
 
     # Create checkpoint folder
     experiment = args.experiment
-    run_name = f"Experiment_{experiment}"
+    run_name = f"Experiment_{experiment}/data_{args.data}"
     if args.resume_dir is not None:  # Create a new folder for continuation so that things don't get overwritten
-        exp_name = os.path.basename(os.path.dirname(args.resume_dir))  # Experiment_X
         old_version = os.path.basename(args.resume_dir)  # version_Y
         new_version = f"{old_version}_cont"  # Specify that it is a continuation
-        logger = CSVLogger(save_dir=os.path.dirname(os.path.dirname(args.resume_dir)),  # checkpoints
-                           name=exp_name,
+        version_parent = os.path.dirname(args.resume_dir)  # .../Experiment_X/data_Y
+        data_name = os.path.basename(version_parent)  # data_Y
+        exp_dir = os.path.dirname(version_parent)  # .../Experiment_X
+        exp_name = os.path.basename(exp_dir)  # Experiment_X
+        save_dir = os.path.dirname(exp_dir)  # checkpoints
+        logger = CSVLogger(save_dir=save_dir,
+                           name=f"{exp_name}/{data_name}",
                            version=new_version)
         check_dir = logger.log_dir
     else:

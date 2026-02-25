@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 from training import LitSwinUNETR
-from ssl_data_loading import ssl_data_loader
+from data_loading import ssl_data_loader
 from monai.inferers import sliding_window_inference
 from functools import partial
 
@@ -55,7 +55,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default="selma")
-    parser.add_argument("--roi", type=int, nargs=3, default=[120, 120, 96])
+    parser.add_argument("--roi", type=int, nargs=3, default=[128, 128, 128])
     parser.add_argument('--fold', type=int, default=1)
     # parser.add_argument("--ckpt_path", type=str, required=True)
     parser.add_argument("--num_samples", type=int, default=3)
@@ -80,8 +80,7 @@ if __name__ == '__main__':
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_brats")
         split_file = os.path.join(data_dir, "data_split.json")
         _, _, _, test_loader = ssl_data_loader(dataset_type=args.data, batch_size=1, roi=roi, data_dir=data_dir,
-                                               split_file=split_file,
-                                               fold=fold)  # Load the supervised test data (same as validation data)
+                                               split_file=split_file, fold=fold)
 
     elif args.data == "numorph":
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_numorph")
