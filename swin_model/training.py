@@ -106,9 +106,11 @@ if __name__ == '__main__':
     parser.add_argument('--fold', type=int, default=1)
     parser.add_argument('--roi', type=int, nargs=3, default=[96, 96, 96])
     parser.add_argument('--val_every', type=int, default=10)
-    parser.add_argument('--experiment', type=int, default=1)
-    parser.add_argument('--data', type=str, required=True)
     parser.add_argument("--resume_dir", type=str, default=None)
+    parser.add_argument("--pretrain_ckpt", type=str, default=None)
+    parser.add_argument("--train_fraction", type=float, default=1.0)
+    parser.add_argument('--experiment', type=int, required=True)
+    parser.add_argument('--data', type=str, required=True)
     args = parser.parse_args()
 
     # Define hyperparameters
@@ -134,14 +136,16 @@ if __name__ == '__main__':
         split_file = os.path.join(data_dir, "data_split.json")  # Json path is data directory + json filename
         _, train_loader, val_loader, _ = ssl_data_loader(dataset_type=args.data, batch_size=batch_size,
                                                          data_dir=data_dir,
-                                                         split_file=split_file, fold=fold, roi=roi)
+                                                         split_file=split_file, fold=fold, roi=roi,
+                                                         train_fraction=args.train_fraction)
     elif args.data == "numorph":
         in_channels = 1
         out_channels = 1
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_numorph")
         _, train_loader, val_loader, _ = ssl_data_loader(dataset_type=args.data, batch_size=batch_size,
                                                          data_dir=data_dir,
-                                                         roi=roi)
+                                                         roi=roi,
+                                                         train_fraction=args.train_fraction)
     elif args.data == "selma":
         in_channels = 1
         out_channels = 1
@@ -149,7 +153,8 @@ if __name__ == '__main__':
         _, train_loader, val_loader, _ = ssl_data_loader(dataset_type=args.data,
                                                          batch_size=batch_size,
                                                          data_dir=data_dir,
-                                                         roi=roi)
+                                                         roi=roi,
+                                                         train_fraction=args.train_fraction)
 
     else:
         raise ValueError("Unknown dataset")
@@ -165,6 +170,16 @@ if __name__ == '__main__':
         num_classes=out_channels
     )
 
+    # Load pretrained encoder weights if a pretrained checkpoint is provided
+    if args.pretrain_ckpt is not None:
+        ssl_ckpt = torch.load(args.pretrain_ckpt, map_location="cpu", weights_only=False)
+        ssl_weights = ssl_ckpt["state_dict"]
+        filtered_weights = {k.replace("model.", ""): v for k, v in ssl_weights.items()
+                            if not any(excl in k for excl in ["recon_head", "mask_token"])}
+        missing, unexpected = model.load_state_dict(filtered_weights, strict=False)
+        print(f"Loaded SSL weights. Missing keys: {len(missing)}")
+        print(f"Ignored keys: {len(unexpected)}")
+
     # Set up lightning modules
     lit_model = LitSwinUNETR(model, args.data, lr, epochs, roi, sw_batch_size, infer_overlap)
 
@@ -174,9 +189,9 @@ if __name__ == '__main__':
     if args.resume_dir is not None:  # Create a new folder for continuation so that things don't get overwritten
         old_version = os.path.basename(args.resume_dir)  # version_Y
         new_version = f"{old_version}_cont"  # Specify that it is a continuation
-        version_parent = os.path.dirname(args.resume_dir)  # .../Experiment_X/data_Y
+        version_parent = os.path.dirname(args.resume_dir)  # Experiment_X/data_Y
         data_name = os.path.basename(version_parent)  # data_Y
-        exp_dir = os.path.dirname(version_parent)  # .../Experiment_X
+        exp_dir = os.path.dirname(version_parent)  # Experiment_X
         exp_name = os.path.basename(exp_dir)  # Experiment_X
         save_dir = os.path.dirname(exp_dir)  # checkpoints
         logger = CSVLogger(save_dir=save_dir,

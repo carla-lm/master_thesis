@@ -41,8 +41,8 @@ if __name__ == '__main__':
     fold = args.fold
     roi = tuple(args.roi)
     patch_size = (2, 2, 2)
-    ckpt_path = (r"D:\Master_Thesis\master_thesis\swin_model\checkpoints_ssl\Brats\L1_SSIM_E1v3_Latest\best-model"
-                 r"-epoch=74-val_loss=0.1974.ckpt")
+    ckpt_path = (r"D:\Master_Thesis\master_thesis\swin_model\Final_Results\MIM\Experiment_16\data_brats\version_0"
+                 r"\best-model-epoch=96-train_loss=0.0019.ckpt")
 
     if args.data == "brats":
         data_dir = os.path.join(os.getcwd(), "TrainingData", "data_brats")

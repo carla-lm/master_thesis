@@ -156,8 +156,11 @@ def visualize_mask_overlay(x, mask, recon, filename="overlay.png", save_dir=None
     overlay_masked = x_slice.copy()
     overlay_masked[mask_slice > 0] = -0.1  # Set image voxels where mask is applied to value -0.1
 
+    # Use reconstructed values for masked patches and original values for visible patches
+    recon_adjusted = recon_slice * mask_slice + x_slice * (1 - mask_slice)
+
     # Plot each image
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axs = plt.subplots(1, 4, figsize=(20, 5))
     axs[0].imshow(x_slice, cmap='gray')
     axs[0].set_title("Original Image")
     axs[0].axis('off')
@@ -167,8 +170,14 @@ def visualize_mask_overlay(x, mask, recon, filename="overlay.png", save_dir=None
     axs[1].axis('off')
 
     axs[2].imshow(recon_slice, cmap='gray')
-    axs[2].set_title("Reconstructed Image")
+    axs[2].set_title("Raw Reconstruction")
     axs[2].axis('off')
+
+    axs[3].imshow(recon_adjusted, cmap='gray')
+    axs[3].set_title("Adjusted Reconstruction")
+    axs[3].axis('off')
+
+
 
     plt.tight_layout()
     # plt.show()

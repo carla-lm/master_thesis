@@ -2,7 +2,7 @@ import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from swinunetr import SwinUNETREncoder3D
+from swinunetr import SwinUNETREncoder3D, SwinUNETRDecoder3D, EncoderSkipsProcessor
 from transforms import get_ssl_transforms, get_byol_transforms
 
 
@@ -26,7 +26,7 @@ def upsample_mask_to_voxels(patch_mask, original_shape):
     return mask.bool()
 
 
-class SSLDecoder3D(nn.Module):  # Decoder to reconstruct masked voxels from the encoded visible tokens
+class LightDecoder3D(nn.Module):  # Light SimMIM-like decoder
     def __init__(self, decoder_dim, out_channels):
         super().__init__()
         self.decoding_blocks = nn.Sequential(
@@ -71,7 +71,12 @@ class MIMSwinUNETR3D(nn.Module):
         self.encoder = SwinUNETREncoder3D(in_channels=self.in_channels, patch_size=self.patch_size,
                                           embed_dims=self.embed_dims, num_heads=self.num_heads,
                                           window_size=self.window_size)
-        self.decoder = SSLDecoder3D(decoder_dim=embed_dims[-1], out_channels=in_channels)
+        self.processor = EncoderSkipsProcessor(embed_dims)
+        self.decoder = SwinUNETRDecoder3D(embed_dims)
+        self.recon_head = nn.Sequential(
+            nn.Conv3d(embed_dims[0], in_channels, kernel_size=1),
+            nn.Sigmoid()
+        )
         # Learnable mask token in embedding space (more expressive than voxel-level masking)
         self.mask_token = nn.Parameter(torch.zeros(1, 1, 1, 1, embed_dims[0]))
         nn.init.normal_(self.mask_token, std=0.02)
@@ -79,21 +84,31 @@ class MIMSwinUNETR3D(nn.Module):
     def forward(self, x):
         original_shape = x.shape  # (B, C, H, W, D)
         x = x.permute(0, 2, 3, 4, 1).contiguous()  # (B, C, H, W, D) -> (B, H, W, D, C)
-        skip_embed, x = self.encoder.patch_embed(x)  # x: (B, H', W', D', embed_dim)
+        skip_embed, x = self.encoder.patch_embed(x)
         B, pH, pW, pD, C = x.shape
-        patch_mask = patch_level_mask(B, pH, pW, pD, self.mask_ratio, x.device)  # Create mask at patch level
-        mask_tokens = self.mask_token.expand(B, pH, pW, pD, -1)  # Expand mask token matrix
-        x = torch.where(patch_mask.unsqueeze(-1), mask_tokens, x)  # Replace masked patches with learnable mask token
+        patch_mask = patch_level_mask(B, pH, pW, pD, self.mask_ratio, x.device)
+        mask_tokens = self.mask_token.expand(B, pH, pW, pD, -1)
+        x = torch.where(patch_mask.unsqueeze(-1), mask_tokens, x)
+
+        skips = [skip_embed, x]
         for i in range(self.encoder.num_stages):
             x = self.encoder.trans_blocks[i](x)
             x = self.encoder.merge_layers[i](x)
             x = self.encoder.stage_norms[i](x)
+            if i < self.encoder.num_stages - 1:
+                skips.append(x)
 
-        latent = x.permute(0, 4, 3, 1, 2).contiguous()  # (B, C, D_lat, H_lat, W_lat)
-        recon = self.decoder(latent)
+        # Permute encoder output and all skips to (B, C, D, H, W) for the decoder
+        encoder_output = x.permute(0, 4, 3, 1, 2).contiguous()
+        skips = [s.permute(0, 4, 3, 1, 2).contiguous() for s in skips]
+        # print("Encoder output shape", encoder_output.shape)
+        encoder_output, skips = self.processor(encoder_output, skips)
+        recon = self.recon_head(self.decoder(encoder_output, skips))
+        # print("Decoder output shape", recon.shape)
         recon = recon[:, :, :original_shape[4], :original_shape[2], :original_shape[3]]
         recon = recon.permute(0, 1, 3, 4, 2).contiguous()  # (B, C, H, W, D)
-        voxel_mask = upsample_mask_to_voxels(patch_mask, original_shape)  # Upsample mask to voxel level for loss
+        # print("Reconstruction shape", recon.shape)
+        voxel_mask = upsample_mask_to_voxels(patch_mask, original_shape)
         return recon, voxel_mask
 
 
@@ -142,7 +157,7 @@ def update_moving_average(ema_updater, ma_model, current_model):
 
 class BYOLSwinUNETR3D(nn.Module):
     def __init__(self, in_channels, patch_size, embed_dims, num_heads, window_size,
-                 proj_hidden=4096, proj_out=256, pred_hidden=4096, ma_decay=0.99):
+                 proj_hidden=1024, proj_out=256, pred_hidden=1024, ma_decay=0.9995):
         super().__init__()
         self.in_channels = in_channels
         self.patch_size = patch_size
@@ -213,7 +228,6 @@ if __name__ == "__main__":
     img = nib.load(img_path).get_fdata()  # (H, W, D)
     img = torch.tensor(img, dtype=torch.float32)
     img = img.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions (1, 1, H, W, D)
-    print("Image shape: ", img.shape)
 
     # Define variables
     patch_size = (2, 2, 2)
@@ -221,7 +235,10 @@ if __name__ == "__main__":
     num_heads = [3, 6, 12, 24]
     window_size = (8, 8, 8)
     num_classes = 3
-    roi = (128, 128, 128)
+    roi = (120, 120, 96)
+
+    img = img[:, :, :roi[0], :roi[1], :roi[2]]  # Crop to ROI size to avoid OOM
+    print("Image shape: ", img.shape)
 
     # Get BYOL views
     base_transform = get_ssl_transforms("brats", roi, ssl_mode="byol")

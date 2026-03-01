@@ -451,7 +451,9 @@ if __name__ == "__main__":
     num_heads = [3, 6, 12, 24]
     window_size = (8, 8, 8)
     num_classes = 3
+    roi = (120, 120, 96)
 
+    img = img[:, :, :roi[0], :roi[1], :roi[2]]  # Crop to ROI size to avoid OOM
     # Instantiate and run model
     model = SwinUNETR3D(
         in_channels=img.shape[1],

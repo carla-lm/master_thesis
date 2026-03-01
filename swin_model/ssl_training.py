@@ -1,5 +1,6 @@
 # Import necessary packages
 import os
+import math
 import argparse
 import torch
 import torch.nn.functional as F
@@ -103,8 +104,13 @@ class SSLLitSwinUNETR(pl.LightningModule):
             return loss
 
     def on_train_batch_end(self, outputs, batch, batch_idx):
-        # Update target network after each training step
+        # Update target network after each training step with cosine EMA schedule
         if self.ssl_mode == "byol":
+            # Ramp decay from initial ma decay to 1.0 over training
+            max_steps = self.epochs * self.trainer.num_training_batches
+            progress = self.global_step / max_steps if max_steps > 0 else 1.0
+            new_decay = 1 - (1 - self.model.ma_decay) * (math.cos(math.pi * progress) + 1) / 2
+            self.model.target_ema_updater.beta = new_decay
             self.model.update_moving_average()
 
     def on_train_epoch_end(self):
@@ -130,17 +136,17 @@ if __name__ == '__main__':
     # Set parameters that can be passed by the user
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--lr', type=float, default=1e-5)
+    parser.add_argument('--lr', type=float, default=5e-4)
     parser.add_argument('--batch', type=int, default=2)
     parser.add_argument('--accum_steps', type=int, default=8)
     parser.add_argument('--embed_dim', type=int, default=96)
     parser.add_argument('--fold', type=int, default=1)
     parser.add_argument('--roi', type=int, nargs=3, default=[96, 96, 96])
     parser.add_argument('--mask_ratio', type=float, default=0.75)
-    parser.add_argument('--experiment', type=int, default=1)
-    parser.add_argument('--data', type=str, default="brats")
     parser.add_argument("--resume_dir", type=str, default=None)
-    parser.add_argument('--ssl_mode', type=str, default="mim", choices=["mim", "byol"])
+    parser.add_argument('--experiment', type=int, required=True)
+    parser.add_argument('--data', type=str, required=True)
+    parser.add_argument('--ssl_mode', type=str, required=True, choices=["mim", "byol"])
     args = parser.parse_args()
 
     # Define hyperparameters
@@ -203,9 +209,9 @@ if __name__ == '__main__':
     if args.resume_dir is not None:  # Create a new folder for continuation so that things don't get overwritten
         old_version = os.path.basename(args.resume_dir)  # version_Y
         new_version = f"{old_version}_cont"  # Specify that it is a continuation
-        version_parent = os.path.dirname(args.resume_dir)  # .../Experiment_X/data_Y
+        version_parent = os.path.dirname(args.resume_dir)  # Experiment_X/data_Y
         data_name = os.path.basename(version_parent)  # data_Y
-        exp_dir = os.path.dirname(version_parent)  # .../Experiment_X
+        exp_dir = os.path.dirname(version_parent)  # Experiment_X
         exp_name = os.path.basename(exp_dir)  # Experiment_X
         save_dir = os.path.dirname(exp_dir)  # checkpoints_ssl
         logger = CSVLogger(save_dir=save_dir,

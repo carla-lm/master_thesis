@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split
 from transforms import get_supervised_transforms, get_ssl_transforms
 
 
-def data_split_brats_ssl(data_dir, split_file, fold, seed=42):
+def data_split_brats_ssl(data_dir, split_file, fold, seed=42, train_fraction=1.0):
     with open(split_file) as file:
         data = json.load(file)  # Load json file's content into a Python dictionary
         data = data["training"]  # Extract the entries of "training" in the file
@@ -31,10 +31,12 @@ def data_split_brats_ssl(data_dir, split_file, fold, seed=42):
     # Split finetuning fold into 70% train, 15% val, 15% test
     train_files, remaining = train_test_split(finetune_files, test_size=0.3, random_state=seed)
     val_files, test_files = train_test_split(remaining, test_size=0.5, random_state=seed)
+    if train_fraction < 1.0:
+        train_files, _ = train_test_split(train_files, train_size=train_fraction, random_state=seed)
     return ssl_train_files, train_files, val_files, test_files
 
 
-def data_split_numorph_ssl(data_dir, seed=42):
+def data_split_numorph_ssl(data_dir, seed=42, train_fraction=1.0):
     pairs = [("c075_images_final_224_64", "c075_cen_final_224_64"),
              ("c121_images_final_224_64", "c121_cen_final_224_64_1")]
 
@@ -58,6 +60,10 @@ def data_split_numorph_ssl(data_dir, seed=42):
     val_imgs, test_imgs, val_labels, test_labels = train_test_split(
         remaining_imgs, remaining_labels, test_size=0.5, random_state=seed)
 
+    if train_fraction < 1.0:
+        train_imgs, _, train_labels, _ = train_test_split(
+            train_imgs, train_labels, train_size=train_fraction, random_state=seed)
+
     train_files = [{"image": i, "label": l} for i, l in zip(train_imgs, train_labels)]
     val_files = [{"image": i, "label": l} for i, l in zip(val_imgs, val_labels)]
     test_files = [{"image": i, "label": l} for i, l in zip(test_imgs, test_labels)]
@@ -65,7 +71,7 @@ def data_split_numorph_ssl(data_dir, seed=42):
     return ssl_train_files, train_files, val_files, test_files
 
 
-def data_split_selma_ssl(data_dir, seed=42):
+def data_split_selma_ssl(data_dir, seed=42, train_fraction=1.0):
     entity_dirs = ["Cells", "Nuclei", "Vessels"]
     # Unannotated data (for SSL pretraining)
     ssl_imgs = []
@@ -114,21 +120,29 @@ def data_split_selma_ssl(data_dir, seed=42):
     val_files, test_files, _, _ = train_test_split(
         remaining, remaining_entity_labels, test_size=0.5, random_state=seed, stratify=remaining_entity_labels
     )
+    if train_fraction < 1.0:
+        train_files, _, train_entity_labels, _ = train_test_split(
+            train_files, train_entity_labels, train_size=train_fraction, random_state=seed,
+            stratify=train_entity_labels)
     return ssl_train_files, train_files, val_files, test_files
 
 
-def ssl_data_loader(dataset_type, batch_size, roi, data_dir, ssl_mode=None, split_file=None, fold=None):
+def ssl_data_loader(dataset_type, batch_size, roi, data_dir, ssl_mode=None, split_file=None, fold=None,
+                    train_fraction=1.0):
     if dataset_type == "brats":
         if split_file is None or fold is None:
             raise ValueError("For the BraTS dataset you must provide a split file and a fold")
         ssl_train_files, train_files, val_files, test_files = data_split_brats_ssl(data_dir, split_file,
-                                                                                   fold, seed=42)
+                                                                                   fold, seed=42,
+                                                                                   train_fraction=train_fraction)
 
     elif dataset_type == "numorph":
-        ssl_train_files, train_files, val_files, test_files = data_split_numorph_ssl(data_dir, seed=42)
+        ssl_train_files, train_files, val_files, test_files = data_split_numorph_ssl(data_dir, seed=42,
+                                                                                     train_fraction=train_fraction)
 
     elif dataset_type == "selma":
-        ssl_train_files, train_files, val_files, test_files = data_split_selma_ssl(data_dir, seed=42)
+        ssl_train_files, train_files, val_files, test_files = data_split_selma_ssl(data_dir, seed=42,
+                                                                                   train_fraction=train_fraction)
 
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")

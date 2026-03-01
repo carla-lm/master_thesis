@@ -21,3 +21,7 @@ swin_model/train_ssl.sh
 requirements_conda.txt
 .claude/settings.local.json
 /swin_model/.claude
+/swin_model/Final Results
+/swin_model/Final_Results
+/swin_model/testing
+swin_model/metrics_merge.py
