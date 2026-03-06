@@ -1,0 +1,6 @@
+The BraTS 2021 dataset is a collection of 3D multi-modal MRI images of brain tumors with voxel-level ground-truth labels annotated by physicians. 
+The training set contains 1251 volumes, each of which contains four channels corresponding to different modalities: native (T1), post-contrast T1-weighted (T1ce), T2-weighted (T2) and T2 fluid-attenuated inversion recovery (flair).
+In addition, for each volume a segmentation mask is included, which contains four labels: 0 for background and non-tumor areas, 1 for the necrotic parts of the tumor, 2 for peritumoral edematous tissue and 4 for enhancing tumor.
+However, the classes evaluated are the enhancing tumor (label 4), the tumor core (labels 1 and 4) and the whole tumor (labels 1, 2 and 4), so the output segmentation consists of three channels, each with a binary mask segmenting one of the previous classes.
+Apart from that, a JSON file is provided, which divides the training data into five folds to facilitate reproducibility and cross-validation. The data is saved in NIfTI format (.nii.gz) and has shape 240x240x155; it was preprocessed by aligning the volumes, 
+stripping the skull and resampling the images to a 1x1x1 mm isotropic resolution.
