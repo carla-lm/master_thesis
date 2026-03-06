@@ -6,7 +6,7 @@ Supports the BraTS 2021 brain tumor segmentation dataset and the Selma3D light-s
 
 ## Architecture
 
-![Alt text](assets/swin_unetr.png)
+![Alt text](swin_model/assets/swin_unetr.png)
 
 ## Requirements
 
