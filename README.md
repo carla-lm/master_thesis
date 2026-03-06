@@ -4,6 +4,10 @@ Custom 3D SwinUNETR implementation with self-supervised pre-training (MIM and BY
 
 Supports the BraTS 2021 brain tumor segmentation dataset and the Selma3D light-sheet fluorescence microscopy dataset.
 
+## Architecture
+
+![Alt text](assets/swin_unetr.png)
+
 ## Requirements
 
 - Python 3.8+
