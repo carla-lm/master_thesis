@@ -1,8 +1,16 @@
 # SwinUNETR for 3D Medical Image Segmentation
 
-Custom 3D SwinUNETR implementation with self-supervised pre-training (MIM and BYOL) and supervised fine-tuning for volumetric medical image segmentation. Developed as part of a master's thesis analyzing the impact of SSL pre-training on LSFM data.
+Custom 3D SwinUNETR implementation with self-supervised pre-training (MIM and BYOL) and supervised fine-tuning for volumetric medical image segmentation. Developed as part of a master's thesis analyzing the impact of SSL pre-training on LSFM data. Supports the BraTS 2021 brain tumor segmentation dataset and the Selma3D 2024 light-sheet fluorescence microscopy dataset.
 
-Supports the BraTS 2021 brain tumor segmentation dataset and the Selma3D light-sheet fluorescence microscopy dataset.
+## Datasets
+
+The BraTS 2021 dataset can be found at: https://www.kaggle.com/datasets/dschettler8845/brats-2021-task1
+The annotated Selma3D 2024 dataset can be found at: https://www.ebi.ac.uk/biostudies/bioimages/studies/S-BIAD1196
+The unannotated Selma3D 2024 dataset can be found at: https://www.ebi.ac.uk/biostudies/bioimages/studies/S-BIAD1197
+As the unannotated volumes are too big, smaller 3D patches were subsampled, which can be found at Zenodo:
+- Nuclei patches: https://doi.org/10.5281/zenodo.19020759
+- Vessel patches: https://doi.org/10.5281/zenodo.19020811
+- Cell patches: https://doi.org/10.5281/zenodo.19009350
 
 ## Architecture
 
